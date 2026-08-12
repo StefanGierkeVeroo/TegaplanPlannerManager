@@ -1,0 +1,1045 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TeGA-Plan Ressourcenplanung</title>
+<style>
+:root{
+  --bg:#f5f6f8; --panel:#ffffff; --line:#e3e6ea; --line-strong:#cfd4da;
+  --text:#1c2430; --muted:#6b7684; --accent:#1a56db; --accent-soft:#eaf0fe;
+  --danger:#b42318; --danger-soft:#fef3f2; --ok:#067647; --ok-soft:#ecfdf3;
+  --warn:#b54708; --warn-soft:#fffaeb;
+  --radius:8px; --shadow:0 1px 2px rgba(16,24,40,.06),0 1px 3px rgba(16,24,40,.1);
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;background:var(--bg);color:var(--text);
+  font:14px/1.5 "Segoe UI",system-ui,-apple-system,Roboto,Helvetica,Arial,sans-serif;
+  -webkit-font-smoothing:antialiased}
+button{font:inherit;cursor:pointer}
+input,select{font:inherit}
+
+/* ---------------------------------------------------------------- Layout */
+#app{display:flex;min-height:100vh}
+aside{width:248px;flex:0 0 248px;background:var(--panel);border-right:1px solid var(--line);
+  display:flex;flex-direction:column;position:sticky;top:0;height:100vh}
+.brand{padding:20px 18px 16px;border-bottom:1px solid var(--line)}
+.brand img{max-width:150px;height:auto;display:block}
+nav{padding:12px 10px;flex:1}
+nav a{display:flex;align-items:center;gap:10px;padding:9px 12px;margin-bottom:2px;
+  border-radius:var(--radius);color:var(--text);text-decoration:none;font-weight:500}
+nav a:hover{background:#f1f3f6}
+nav a.active{background:var(--accent-soft);color:var(--accent)}
+nav a svg{width:17px;height:17px;flex:0 0 17px;opacity:.75}
+.userbox{padding:12px 16px;border-top:1px solid var(--line);font-size:12.5px;color:var(--muted)}
+.userbox .nm{color:var(--text);font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.userbox button{margin-top:6px;background:none;border:none;color:var(--accent);padding:0;font-size:12.5px}
+
+main{flex:1;min-width:0;padding:26px 30px 60px}
+.page-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:18px}
+h1{font-size:21px;margin:0 0 3px;font-weight:600;letter-spacing:-.2px}
+.sub{color:var(--muted);font-size:13px}
+
+/* ---------------------------------------------------------------- Panels */
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow)}
+.toolbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:12px 14px;border-bottom:1px solid var(--line)}
+.search{position:relative;flex:1;min-width:200px;max-width:380px}
+.search input{width:100%;padding:8px 12px 8px 32px;border:1px solid var(--line-strong);border-radius:6px;background:#fff}
+.search input:focus{outline:2px solid var(--accent-soft);border-color:var(--accent)}
+.search svg{position:absolute;left:10px;top:50%;transform:translateY(-50%);width:14px;height:14px;opacity:.45}
+.count{color:var(--muted);font-size:12.5px;margin-left:auto}
+
+/* ---------------------------------------------------------------- Buttons */
+.btn{border:1px solid var(--line-strong);background:#fff;color:var(--text);
+  padding:8px 14px;border-radius:6px;font-weight:500}
+.btn:hover:not(:disabled){background:#f7f8fa}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+.btn.primary:hover:not(:disabled){background:#1546b8}
+.btn.ghost{border-color:transparent;background:transparent;color:var(--accent)}
+
+/* ---------------------------------------------------------------- Tables */
+.tablewrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse}
+th,td{text-align:left;padding:10px 14px;border-bottom:1px solid var(--line);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+th{background:#fbfcfd;font-weight:600;font-size:12.5px;color:var(--muted);
+  position:sticky;top:0;z-index:1;user-select:none}
+th.sortable{cursor:pointer}
+th.sortable:hover{color:var(--text)}
+th .arrow{opacity:.5;font-size:10px;margin-left:3px}
+td.subject{max-width:420px;white-space:normal}
+tbody tr.clickable{cursor:pointer}
+tbody tr:hover{background:#f8fafc}
+tbody tr.sel{background:var(--accent-soft)}
+tbody tr.sel:hover{background:#dfe8fd}
+td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
+td.check,th.check{width:38px;padding-right:0}
+input[type=checkbox]{width:15px;height:15px;accent-color:var(--accent);cursor:pointer;margin:0;vertical-align:middle}
+.empty{padding:40px;text-align:center;color:var(--muted)}
+
+/* -------------------------------------------------------------- Paginator */
+.pager{display:flex;align-items:center;gap:8px;padding:10px 14px;color:var(--muted);font-size:12.5px}
+.pager .btn{padding:5px 10px}
+.pager .spacer{margin-left:auto}
+
+/* ------------------------------------------------------------------- Tabs */
+.tabs{display:flex;gap:2px;border-bottom:1px solid var(--line);margin-bottom:18px}
+.tabs button{background:none;border:none;padding:10px 16px;color:var(--muted);
+  font-weight:500;border-bottom:2px solid transparent;margin-bottom:-1px}
+.tabs button.active{color:var(--accent);border-bottom-color:var(--accent)}
+
+/* ------------------------------------------------------------------ Forms */
+.form{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:16px;padding:20px}
+.field label{display:block;font-size:12.5px;color:var(--muted);margin-bottom:5px;font-weight:500}
+.field input{width:100%;padding:8px 11px;border:1px solid var(--line-strong);border-radius:6px;background:#fff}
+.field input[readonly]{background:#f7f8fa;color:#414c59}
+.field input:focus{outline:2px solid var(--accent-soft);border-color:var(--accent)}
+
+/* ----------------------------------------------------------------- Dialog */
+dialog{border:none;border-radius:10px;padding:0;box-shadow:0 20px 40px rgba(16,24,40,.18);
+  max-width:min(560px,94vw);width:100%;color:var(--text)}
+dialog::backdrop{background:rgba(16,24,40,.45)}
+.dlg-head{padding:20px 22px 0}
+.dlg-head h2{margin:0 0 4px;font-size:17px;font-weight:600}
+.dlg-head p{margin:0;color:var(--muted);font-size:13px}
+.dlg-body{padding:18px 22px}
+.dlg-foot{display:flex;justify-content:flex-end;gap:10px;padding:14px 22px 20px;border-top:1px solid var(--line);margin-top:6px}
+.dlg-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+
+/* ---------------------------------------------------------------- Notices */
+.notice{border-radius:6px;padding:11px 14px;font-size:13px;margin:0 0 14px;border:1px solid}
+.notice.info{background:var(--accent-soft);border-color:#c7d7fd;color:#14399c}
+.notice.warn{background:var(--warn-soft);border-color:#fedf89;color:var(--warn)}
+.notice.err{background:var(--danger-soft);border-color:#fecdca;color:var(--danger)}
+.notice.ok{background:var(--ok-soft);border-color:#abefc6;color:var(--ok)}
+.notice ul{margin:7px 0 0;padding-left:18px}
+.notice code{background:rgba(0,0,0,.06);padding:1px 5px;border-radius:3px;font-size:12px}
+
+/* ---------------------------------------------------------------- Overlay */
+#overlay{position:fixed;inset:0;background:rgba(245,246,248,.82);display:none;
+  align-items:center;justify-content:center;flex-direction:column;gap:14px;z-index:99}
+#overlay.on{display:flex}
+.spinner{width:26px;height:26px;border:3px solid var(--line-strong);border-top-color:var(--accent);
+  border-radius:50%;animation:spin .7s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+#overlay .txt{color:var(--muted);font-size:13px}
+
+.center{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px}
+.card{max-width:520px;width:100%;padding:30px;text-align:center}
+.card img{max-width:170px;margin:0 0 22px}
+.mono{font-family:Consolas,"Courier New",monospace;font-size:12px;word-break:break-all}
+</style>
+</head>
+<body>
+
+<div id="boot" class="center"><div class="panel card">
+  <img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAZAAAAChCAMAAADeMBlCAAAAXVBMVEVHcEz///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////+EHRzTAAAAHnRSTlMAd/BEgCJmwLtAECDd0KARMGDu4LAzzFBVkJlwiKrBxjMzAAAACXBIWXMAAALuAAAC7gGSzXdzAAAKo0lEQVR4nO2d2ZazKhCFnWPMoJnH5v0f8ywUpZghMWn+07UverWioPVJAQWa5G3tsu79TFCzaUdItkJzxqMFIWT5140QkxBIZEIgkQmBRCYEEpkQSGRCIJEJgUQmBBKZEEhkQiCRCYFEJgQSmRBIZEIgkQmBRCYKpPnrRohJFMhft0FUQiCRCYFEJgQSmRBIZEIgkQmBRCYEEpkQSGRCIJEJgUSmEUiz2xByxKjWr2sA0m0zQpVh4Pe3RYHQyjGq+Nvm+H0tiKQFuq1fVPPIRhybXfMY3Nblz5rjt7XcjjSybf9eW3fot25/2iq/pVVxAJWDXUQzINrgS27f1uUIWg5Y9i5Dt/V1gcqxOMgDw27oct2wbf+WeOXIbivNSH10W/i29De0uk3dqsUuMYROLoPb2v0fDRCXdtOo41Cwdlsby1oNbmuLbuuTApXjyNtsQ3DxNmBDt/UpNTw8MlWOXqZo7+C2yOOfvutoNcYOqRuSOrTG8PtqcG8YAJ5dsHI8FPNa5kMKdFsf0BJUDl1s3TZBtRxOxQDwbGoePDyiVo5e1hnDZnBbGACeR0rsUCfHFO4D561m0uqhiR1q5JpTZwFgdFvvCYRHzJWjl3ORQzNktcAA8MuCsUNn+MNj1QnOW70lMXbolM8yoDEAHPFdR6td5l85enmty8J5q1e11IZHbPJcKIfzVq9pIccOnfJdudhhAPgVUfN6V45e3ktJmxvOW4UrfKVuwBk4bxWujwLBeatwhQPZBJ0xuK3tZ2/i/6QwIKvdMGYJMMDgtrD766sAIN1tnCY5hJTQHPDjKAHyBNJc+CwJIWH9JvxaTYh8gKwecMX75hHYj0UgIXICWd4OHEa2tQXmDUIgIbLP/+2OwFEdbhazNkfDBCMCCZMZSPcAr0mR48PaUWo25gEgAgmRAchlKziq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" alt="TeGA-Plan">
+  <div class="spinner" style="margin:0 auto"></div>
+  <p class="sub" style="margin-top:16px">Anmeldung wird geprüft …</p>
+</div></div>
+
+<div id="app" hidden>
+  <aside>
+    <div class="brand"><img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAZAAAAChCAMAAADeMBlCAAAAXVBMVEVHcEz///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////+EHRzTAAAAHnRSTlMAd/BEgCJmwLtAECDd0KARMGDu4LAzzFBVkJlwiKrBxjMzAAAACXBIWXMAAALuAAAC7gGSzXdzAAAKo0lEQVR4nO2d2ZazKhCFnWPMoJnH5v0f8ywUpZghMWn+07UverWioPVJAQWa5G3tsu79TFCzaUdItkJzxqMFIWT5140QkxBIZEIgkQmBRCYEEpkQSGRCIJEJgUQmBBKZEEhkQiCRCYFEJgQSmRBIZEIgkQmBRCYKpPnrRohJFMhft0FUQiCRCYFEJgQSmRBIZEIgkQmBRCYEEpkQSGRCIJEJgUSmEUiz2xByxKjWr2sA0m0zQpVh4Pe3RYHQyjGq+Nvm+H0tiKQFuq1fVPPIRhybXfMY3Nblz5rjt7XcjjSybf9eW3fot25/2iq/pVVxAJWDXUQzINrgS27f1uUIWg5Y9i5Dt/V1gcqxOMgDw27oct2wbf+WeOXIbivNSH10W/i29De0uk3dqsUuMYROLoPb2v0fDRCXdtOo41Cwdlsby1oNbmuLbuuTApXjyNtsQ3DxNmBDt/UpNTw8MlWOXqZo7+C2yOOfvutoNcYOqRuSOrTG8PtqcG8YAJ5dsHI8FPNa5kMKdFsf0BJUDl1s3TZBtRxOxQDwbGoePDyiVo5e1hnDZnBbGACeR0rsUCfHFO4D561m0uqhiR1q5JpTZwFgdFvvCYRHzJWjl3ORQzNktcAA8MuCsUNn+MNj1QnOW70lMXbolM8yoDEAHPFdR6td5l85enmty8J5q1e11IZHbPJcKIfzVq9pIccOnfJdudhhAPgVUfN6V45e3ktJmxvOW4UrfKVuwBk4bxWujwLBeatwhQPZBJ0xuK3tZ2/i/6QwIKvdMGYJMMDgtrD766sAIN1tnCY5hJTQHPDjKAHyBNJc+CwJIWH9JvxaTYh8gKwecMX75hHYj0UgIXICWd4OHEa2tQXmDUIgIbLP/+2OwFEdbhazNkfDBCMCCZMZSPcAr0mR48PaUWo25gEgAgmRAchlKziqi8tRDetNNlq7I5AQaYCMgw3Whhc+bXgxViRNPUIgIZKB8MFGb9+d54iumE4ptAu5LEBSolFuPr5Nf9bghFpOv1rOhRILPactT9NlKyi/KnfRynucmegFgYiDjcMtICZPgTAnpzQlswJp0714pHLTtacZ5CL3J5hkz0Qto16fpD3vAnlvsFH0UXzm6qSmZE4g5Vk+Ur7p3Fq9gJQy99ND7rKlpoyakErJ/3Ugbw82imHhz5L5u6O8OtsCpKqZqE3G/+XHjek0VI91zfWUDql97QCL6wsnKUiy5qEpg2ZwF9zWG0C8BxtmFeNKrHGKHjQlvo26xx309eNuoNUrtzo8c3En2o54XomujJ7oGV7Za0A62IS7BhsWTUCShrXvvCmZDwj1bnulPRVUa9sVj+Jq0Jg6stCVUQ93nfI9LwAJHWxYVIC1inJTMh8Q6rDsPCp7E2Qpbu0NJB/KEJsMBoT8eDdEkl4ZbFhUCItHxaZkNiBXesP2PNb6lt5dXAo37Tkw26+VnX0DN/W2QoCIgw3iO9iwqJBW88Km5FUgV9Cj6nekXhVkvfarIkoviz/zVlvmYxlCFaFATmfotvyBCIONbJ7PkclAYFPyIpArtFW/B7h5Qy+rt1MF22fYjROPV3jwc6y2PI9lCFWkv7b2OdTP1pkJ1I07qkc31/fhFCCgKfGdMZTu4EzqfFK/BwDhZoSnMDNJj6840IF+SUzgnVabLfVljNd27d3WPg8Bwp5cNtj4HBDelLwGRPU7P4SQdjpWA4RZSXp8zUDAOOQOfaHNlvoypoelnNxWCJCMDzY+CQQsHH4JSMrqR8n2pPyp1AKZjCQ+vmYgJoNZkgxlgNo7uq0QIAu+9VkgmlGJ9cJEIKPGzv1J6duIp6zHRl/x8B7FeSZNHHKxDOBOmduKE4g6KrFemB1Ib43UeErFt5ROkLs4vySAuhbKgOPKspZro+tCvgmEfxPQ9UqVsw0Zhn2V6RTQ3fWpIvZqsFfC6VMZ7ALEKlILdkz/CSCuLzi5gbCghT5OXsGNs7uKWAx2FztdXEKPWqgiIpAk30cOhPmtzPbhDQ8g7dCHWYMY7XSKMB7M3VXEYrCSiF2w6REwlyEBSdo6biDLsSk5mJsS5ziEE9H0mirx9NpZRWwGk+dogCc0lCED6fOIGQgflRjfl3aO1HsZZgzbvRgwcVcR6xMsEWEZr9UyxrZGBZLk+7iBTG+5mdp2ZyxrUFvp5tRT+exa7pG5ihN1uq8VILYyNECSUp48M17IbECmGLEXEDYqwRUoouYDsjuQjM0M+gEZjkMgouYDMnSctisE8pZmBkL7tEsE8obmB0LIZoFAXtasQA4ev1uBQOyaFcgiWU5z86ZYFQKx6y0gq2WxXYxLTFlOq+mzZ9pPAiIQh14E0qNghmdf+ZlyaopxImqhWQ/8ISBpebWvePhXFAwEohAGziAnvvr9oKxD/RAQUvkuq45cAUC6i4LCAmSsJZn0RoIvkGsqhHcrqhPcvAoR8bKq4Ha/cT0J54vhYjHDq5o/3FSupyrl/GnqKZeOgP9XtjWvXF5Auktx3GhILLaFEUjR8cbEtNjaDKRfR73mJu5D4Hxd3LAJ47eVcOFln0bu0vlpIu2YMhwu9GxIZddTg7NpVsIOcqIhLOkI8P+ZzALEgmK5Gu9EyYkNDFe8MVkKRbiB7NdlclIsIGy2ZA/2iC8AaICkSV6DhXWlHGu8i0ClVHo9V/IU00UgZysQXx5mIE4U0/lE/o+P1JvduF74sANFOIFUvemu0kOWiJtnCIQ8YXhbC4SuBjZl6AAyXE96FdMFID+ksgD58eWhA+KJYjrfAgT+xMWhmJZ+OYFQ66T3Ow9YSy5HcVkpKZ8EejgtEMFgkg+TgIipd8mRD+kCkKomZiAEXIpDApBOx8GEYpATCPggcx959AYizCmU5Jym6QluPveghpzJvRZM4AYiZKgAEVNVIDRdBFKSHyOQfe35ItcExFArssXtYUIxne8CQgeLY2NyXHq6rKq3svb+xs2UTB2ZdlhrnvDtpw4IWLAb6rLo9TwrMV0EkjyJwSXS//eGhSuKqC8xovB4RcQLCB0sgpdPfBr1fS50nEryU5ZlCzdzwOtJ2TyBn96vT8kPeCrpCdda2gEyVIBIqfR6UmIHQl9YScQj+P8nYcW3Ra+jGMQ/z2QFQhsTdW2vq9sru3ypW8rbkPW538lrBF3WSMCc6bByJE9MGWrbEJDaX49S4SQgVwuQpCLeU7gARfjrCLwNcgFJkuXYvmfsQ5u2gWF+bRPwiJal8MjSLXBw2/K/TFdp4Cg88GqGSVvaUofrAelyef2OUt5hSrRoJ9SK8GhvCBAh8thhcFGvHXRQnwYyfJeGdd0uCMSpzwOBv/d9wO+euPQlIAWggkBs+hKQZcIjjwjEpq8B4b9TiZ8et+mLQNhPjuGHx636KhD69Qj8/Qq7vg0EhUD+LSGQyIRAIhMCiUy9tYJkBLI15LJBIAHSLrtySQ/EJgTiKwQSmbrMYUqNMhb8AEAaw2IJJvzJI391i2CNwSgAJGmOllzwJ1i/IxLcQ0N9VAgkMiGQyIRAIhMCiUwIJDIhkMiEQCITAolMCCQyIZDIhEAiEwKJTAgkMiGQyIRAIhMCiUwIJDIhkMi0QSBxaabPlKPmEgKJTAgkMi0Iyf66DaJSl2X4AmdU6pAHCoVCoVAoFAqFcilJkv8A/VQKYb5uMDQAAAAASUVORK5CYII=" alt="TeGA-Plan Gebäudetechnik"></div>
+    <nav>
+      <a href="#/projekte" data-nav="projekte">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+        Projekte
+      </a>
+      <a href="#/aufgaben" data-nav="aufgaben">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 6h11M9 12h11M9 18h11"/><path d="M4 6l1 1 2-2M4 12l1 1 2-2M4 18l1 1 2-2"/></svg>
+        Projektaufgaben
+      </a>
+    </nav>
+    <div class="userbox">
+      <div class="nm" id="userName">—</div>
+      <div id="userMail" style="overflow:hidden;text-overflow:ellipsis"></div>
+      <button id="logout">Abmelden</button>
+    </div>
+  </aside>
+  <main id="view"></main>
+</div>
+
+<div id="overlay"><div class="spinner"></div><div class="txt" id="overlayTxt">Bitte warten …</div></div>
+
+<dialog id="editDlg">
+  <div>
+    <div class="dlg-head">
+      <h2>Aufgaben bearbeiten</h2>
+      <p id="editCount"></p>
+    </div>
+    <div class="dlg-body">
+      <div class="notice info">Es werden ausschließlich <strong>Startdatum</strong> und <strong>Enddatum</strong> geändert. Ein leer gelassenes Feld bleibt in allen Datensätzen unverändert.</div>
+      <div class="dlg-grid">
+        <div class="field"><label for="edStart">Startdatum</label><input type="date" id="edStart"></div>
+        <div class="field"><label for="edEnd">Enddatum</label><input type="date" id="edEnd"></div>
+      </div>
+      <div id="editMsg"></div>
+    </div>
+    <div class="dlg-foot">
+      <button type="button" class="btn" id="edCancel">Abbrechen</button>
+      <button type="button" class="btn primary" id="edSave" disabled>Speichern</button>
+    </div>
+  </div>
+</dialog>
+
+<dialog id="confirmDlg">
+  <div>
+    <div class="dlg-head">
+      <h2>Änderung bestätigen</h2>
+      <p>Dieser Vorgang lässt sich nicht rückgängig machen.</p>
+    </div>
+    <div class="dlg-body" id="confirmBody"></div>
+    <div class="dlg-foot">
+      <button type="button" class="btn" id="cfCancel">Abbrechen</button>
+      <button type="button" class="btn primary" id="cfGo">Jetzt speichern</button>
+    </div>
+  </div>
+</dialog>
+
+<script src="https://cdn.jsdelivr.net/npm/@azure/msal-browser@5.18.0/lib/msal-browser.min.js"
+        integrity="sha384-FQfSZjxaWBhzqI7u0+3M2/K/kFajbcK45G1GMnQdDzVZszPTSjjvWY9YEnJ9tEia"
+        crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+<script>
+"use strict";
+
+/* ======================================================================
+   KONFIGURATION
+   ====================================================================== */
+const CONFIG = {
+  tenantId:       "0d0e0c50-756e-48a8-af8d-5059f012dc5e",
+  clientId:       "78b0dff6-f840-4204-a415-d816fa4e4841",
+  environmentUrl: "https://tega-plandefault.crm4.dynamics.com",
+  apiVersion:     "v9.2",
+
+  // Uhrzeit-Konvention beim Schreiben der reinen Datumsfelder (UTC).
+  // Entspricht dem Muster, das in allen vorhandenen Aufgaben steht.
+  startTimeUtc: "09:00:00",
+  endTimeUtc:   "17:00:00",
+
+  pageSize:      100,   // Zeilen je Tabellenseite
+  maxOpsPerSet:  200,   // Dataverse-Limit: 200 Operationen je OperationSet
+  writeParallel: 6,     // gleichzeitige PssUpdate-Aufrufe je Block
+  pollTimeoutMs: 90000  // Wartezeit auf die Scheduling-Engine
+};
+
+const SCOPES = [CONFIG.environmentUrl + "/user_impersonation"];
+const REDIRECT_URI = location.origin + location.pathname;
+
+const FV = "@OData.Community.Display.V1.FormattedValue";
+const OS_STATUS = {
+  192350000: "Offen", 192350001: "Ausstehend", 192350002: "Aufgegeben",
+  192350003: "Abgeschlossen", 192350004: "Fehlgeschlagen"
+};
+const OS_TERMINAL = [192350002, 192350003, 192350004];
+
+/* ======================================================================
+   HILFSFUNKTIONEN
+   ====================================================================== */
+const $  = (s, r) => (r || document).querySelector(s);
+const el = (t, a, h) => { const n = document.createElement(t);
+  if (a) for (const k in a) n.setAttribute(k, a[k]);
+  if (h !== undefined) n.innerHTML = h; return n; };
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c =>
+  ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[c]));
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+function fmtDate(row, col) {
+  if (row[col + FV]) return row[col + FV];
+  if (!row[col]) return "";
+  return new Date(row[col]).toLocaleDateString("de-DE");
+}
+function fmtProgress(v) {
+  if (v === null || v === undefined || v === "") return "";
+  return (v * 100).toLocaleString("de-DE", { maximumFractionDigits: 1 }) + " %";
+}
+// Datumsanteil eines Dataverse-Werts (die Felder liegen als 09:00Z/17:00Z vor)
+const isoDay = v => (v ? String(v).slice(0, 10) : "");
+// "2026-09-10" -> "10.09.2026"
+const de = d => d
+  ? new Date(d + "T00:00:00").toLocaleDateString("de-DE",
+      { day: "2-digit", month: "2-digit", year: "numeric" })
+  : "";
+
+async function mapLimit(items, limit, fn) {
+  const out = new Array(items.length);
+  let i = 0;
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (i < items.length) { const k = i++; out[k] = await fn(items[k], k); }
+  }));
+  return out;
+}
+
+function overlay(on, text) {
+  $("#overlay").classList.toggle("on", !!on);
+  if (text) $("#overlayTxt").textContent = text;
+}
+
+/* ======================================================================
+   AUTHENTIFIZIERUNG
+   ====================================================================== */
+let pca = null;
+
+async function initAuth() {
+  pca = new msal.PublicClientApplication({
+    auth: {
+      clientId: CONFIG.clientId,
+      authority: "https://login.microsoftonline.com/" + CONFIG.tenantId,
+      redirectUri: REDIRECT_URI,
+      navigateToLoginRequestUrl: false
+    },
+    cache: { cacheLocation: "sessionStorage" }
+  });
+  await pca.initialize();
+
+  const res = await pca.handleRedirectPromise();
+  if (res && res.account) pca.setActiveAccount(res.account);
+
+  let acct = pca.getActiveAccount() || pca.getAllAccounts()[0];
+  if (!acct) { await pca.loginRedirect({ scopes: SCOPES }); return false; }
+  pca.setActiveAccount(acct);
+
+  $("#userName").textContent = acct.name || acct.username;
+  $("#userMail").textContent = acct.username || "";
+  return true;
+}
+
+async function getToken() {
+  const r = await pca.acquireTokenSilent({ scopes: SCOPES, account: pca.getActiveAccount() })
+    .catch(async e => {
+      if (e instanceof msal.InteractionRequiredAuthError) {
+        await pca.acquireTokenRedirect({ scopes: SCOPES });
+        return null;
+      }
+      throw e;
+    });
+  if (!r) throw new Error("Anmeldung erforderlich");
+  return r.accessToken;
+}
+
+/* ======================================================================
+   DATAVERSE-ZUGRIFF
+   ====================================================================== */
+async function dv(path, opt) {
+  opt = opt || {};
+  const token = await getToken();
+  const url = /^https?:/.test(path)
+    ? path
+    : CONFIG.environmentUrl + "/api/data/" + CONFIG.apiVersion + "/" + path.replace(/^\//, "");
+
+  const headers = Object.assign({
+    Authorization: "Bearer " + token,
+    Accept: "application/json",
+    "OData-MaxVersion": "4.0",
+    "OData-Version": "4.0"
+  }, opt.headers || {});
+  if (opt.body !== undefined) headers["Content-Type"] = "application/json; charset=utf-8";
+
+  const res = await fetch(url, {
+    method: opt.method || "GET",
+    headers,
+    body: opt.body !== undefined ? JSON.stringify(opt.body) : undefined
+  });
+
+  if (!res.ok) {
+    let msg = "HTTP " + res.status;
+    try {
+      const j = JSON.parse(await res.text());
+      if (j && j.error && j.error.message) msg = j.error.message.split(/\r?\n/)[0];
+    } catch (_) {}
+    const err = new Error(msg); err.status = res.status; throw err;
+  }
+  if (res.status === 204) return null;
+  const txt = await res.text();
+  return txt ? JSON.parse(txt) : null;
+}
+
+// Folgt @odata.nextLink, bis wirklich alles geladen ist.
+async function dvAll(path, onProgress) {
+  const rows = [];
+  let next = path;
+  while (next) {
+    const r = await dv(next, {
+      headers: { Prefer: 'odata.include-annotations="*",odata.maxpagesize=5000' }
+    });
+    rows.push.apply(rows, r.value);
+    if (onProgress) onProgress(rows.length);
+    next = r["@odata.nextLink"] || null;
+  }
+  return rows;
+}
+
+/* ======================================================================
+   DATENHALTUNG
+   ====================================================================== */
+const PROJECT_SELECT = "msdyn_projectid,msdyn_subject,msdyn_scheduledstart,msdyn_finish,msdyn_progress";
+const TASK_SELECT = "msdyn_projecttaskid,msdyn_subject,_msdyn_projectbucket_value," +
+                    "msdyn_scheduledstart,msdyn_scheduledend,msdyn_priority,msdyn_progress,_msdyn_project_value";
+
+const store = { projects: [], tasks: [], byProject: new Map(), projectLabel: new Map() };
+
+async function loadData() {
+  overlay(true, "Projekte werden geladen …");
+  store.projects = await dvAll("msdyn_projects?$select=" + PROJECT_SELECT + "&$orderby=msdyn_subject asc");
+
+  overlay(true, "Aufgaben werden geladen …");
+  store.tasks = await dvAll(
+    "msdyn_projecttasks?$select=" + TASK_SELECT + "&$orderby=msdyn_subject asc",
+    n => overlay(true, n.toLocaleString("de-DE") + " Aufgaben geladen …")
+  );
+
+  // Bei gleichnamigen Projekten das Startdatum zur Unterscheidung anhängen.
+  const nameCount = new Map();
+  for (const p of store.projects)
+    nameCount.set(p.msdyn_subject, (nameCount.get(p.msdyn_subject) || 0) + 1);
+
+  store.projectLabel.clear();
+  for (const p of store.projects) {
+    const dup = nameCount.get(p.msdyn_subject) > 1;
+    const d = fmtDate(p, "msdyn_scheduledstart");
+    store.projectLabel.set(p.msdyn_projectid,
+      p.msdyn_subject + (dup && d ? " (ab " + d + ")" : ""));
+  }
+
+  store.byProject.clear();
+  for (const t of store.tasks) {
+    const pid = t._msdyn_project_value;
+    t.__projectLabel = store.projectLabel.get(pid) || (t["_msdyn_project_value" + FV] || "");
+    if (!store.byProject.has(pid)) store.byProject.set(pid, []);
+    store.byProject.get(pid).push(t);
+  }
+  overlay(false);
+}
+
+/* ======================================================================
+   TABELLE (Sortierung, Suche, Seitenwechsel, Auswahl)
+   ====================================================================== */
+function createTable(opt) {
+  // opt: { columns, rows, getId, selectable, onRowClick, searchFields, emptyText, onSelectionChange }
+  const state = { q: "", sort: opt.defaultSort || null, dir: opt.defaultDir || "asc", page: 0 };
+  const selected = new Set();
+  const root = el("div", { class: "panel" });
+
+  function filtered() {
+    let rows = opt.rows;
+    const q = state.q.trim().toLowerCase();
+    if (q) rows = rows.filter(r => opt.searchFields.some(f => {
+      const v = typeof f === "function" ? f(r) : r[f];
+      return String(v ?? "").toLowerCase().includes(q);
+    }));
+    if (state.sort) {
+      const col = opt.columns.find(c => c.key === state.sort);
+      if (col) {
+        const mul = state.dir === "asc" ? 1 : -1;
+        rows = rows.slice().sort((a, b) => {
+          const av = col.sortValue(a), bv = col.sortValue(b);
+          if (av === bv) return 0;
+          if (av === null || av === undefined || av === "") return 1;   // Leerwerte ans Ende
+          if (bv === null || bv === undefined || bv === "") return -1;
+          return (av > bv ? 1 : -1) * mul;
+        });
+      }
+    }
+    return rows;
+  }
+
+  function render() {
+    const rows = filtered();
+    const pages = Math.max(1, Math.ceil(rows.length / CONFIG.pageSize));
+    if (state.page >= pages) state.page = pages - 1;
+    const slice = rows.slice(state.page * CONFIG.pageSize, (state.page + 1) * CONFIG.pageSize);
+
+    const allFilteredSelected = opt.selectable && rows.length > 0 &&
+      rows.every(r => selected.has(opt.getId(r)));
+
+    let html = '<div class="toolbar">';
+    html += '<div class="search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">' +
+            '<circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>' +
+            '<input type="search" placeholder="' + esc(opt.searchPlaceholder || "Suchen …") +
+            '" value="' + esc(state.q) + '" data-role="q"></div>';
+    if (opt.selectable) {
+      html += '<button class="btn primary" data-role="edit"' + (selected.size ? "" : " disabled") +
+              '>Bearbeiten</button>';
+      if (selected.size)
+        html += '<button class="btn ghost" data-role="clear">Auswahl aufheben</button>';
+    }
+    html += '<span class="count">' +
+      (opt.selectable && selected.size
+        ? "<strong>" + selected.size.toLocaleString("de-DE") + "</strong> ausgewählt · "
+        : "") +
+      rows.length.toLocaleString("de-DE") + " von " + opt.rows.length.toLocaleString("de-DE") +
+      " Datensätzen</span></div>";
+
+    html += '<div class="tablewrap"><table><thead><tr>';
+    if (opt.selectable)
+      html += '<th class="check"><input type="checkbox" data-role="all" title="Alle Treffer auswählen"' +
+              (allFilteredSelected ? " checked" : "") + "></th>";
+    for (const c of opt.columns) {
+      const active = state.sort === c.key;
+      html += '<th class="sortable ' + (c.cls || "") + '" data-sort="' + c.key + '">' + esc(c.label) +
+        (active ? '<span class="arrow">' + (state.dir === "asc" ? "▲" : "▼") + "</span>" : "") + "</th>";
+    }
+    html += "</tr></thead><tbody>";
+
+    if (!slice.length) {
+      html += '<tr><td colspan="' + (opt.columns.length + (opt.selectable ? 1 : 0)) +
+              '"><div class="empty">' + esc(opt.emptyText || "Keine Datensätze gefunden.") + "</div></td></tr>";
+    } else {
+      for (const r of slice) {
+        const id = opt.getId(r);
+        const isSel = selected.has(id);
+        html += '<tr data-id="' + esc(id) + '" class="' + (isSel ? "sel " : "") +
+                (opt.onRowClick ? "clickable" : "") + '">';
+        if (opt.selectable)
+          html += '<td class="check"><input type="checkbox" data-role="row"' + (isSel ? " checked" : "") + "></td>";
+        for (const c of opt.columns) html += '<td class="' + (c.cls || "") + '">' + c.render(r) + "</td>";
+        html += "</tr>";
+      }
+    }
+    html += "</tbody></table></div>";
+
+    if (pages > 1) {
+      html += '<div class="pager"><span>Seite ' + (state.page + 1) + " von " + pages + "</span>" +
+        '<span class="spacer"></span>' +
+        '<button class="btn" data-role="prev"' + (state.page === 0 ? " disabled" : "") + ">Zurück</button>" +
+        '<button class="btn" data-role="next"' + (state.page >= pages - 1 ? " disabled" : "") + ">Weiter</button></div>";
+    }
+
+    root.innerHTML = html;
+    const qi = $('[data-role=q]', root);
+    if (qi) {
+      qi.addEventListener("input", e => {
+        state.q = e.target.value; state.page = 0; render();
+        // render() ersetzt das Eingabefeld – Fokus und Cursor wiederherstellen
+        const n = $('[data-role=q]', root);
+        n.focus();
+        try { n.setSelectionRange(n.value.length, n.value.length); } catch (_) {}
+      });
+    }
+  }
+
+  root.addEventListener("click", ev => {
+    const th = ev.target.closest("th[data-sort]");
+    if (th) {
+      const k = th.dataset.sort;
+      if (state.sort === k) state.dir = state.dir === "asc" ? "desc" : "asc";
+      else { state.sort = k; state.dir = "asc"; }
+      render(); return;
+    }
+    const role = ev.target.dataset ? ev.target.dataset.role : null;
+    if (role === "prev") { state.page--; render(); return; }
+    if (role === "next") { state.page++; render(); return; }
+    if (role === "clear") { selected.clear(); notify(); render(); return; }
+    if (role === "edit") { opt.onEdit(Array.from(selected)); return; }
+    if (role === "all") {
+      const rows = filtered();
+      const on = ev.target.checked;
+      for (const r of rows) { const id = opt.getId(r); if (on) selected.add(id); else selected.delete(id); }
+      notify(); render(); return;
+    }
+    if (role === "row") {
+      ev.stopPropagation();
+      const id = ev.target.closest("tr").dataset.id;
+      if (ev.target.checked) selected.add(id); else selected.delete(id);
+      notify(); render(); return;
+    }
+    const tr = ev.target.closest("tbody tr[data-id]");
+    if (tr && opt.onRowClick) opt.onRowClick(tr.dataset.id);
+  });
+
+  function notify() { if (opt.onSelectionChange) opt.onSelectionChange(Array.from(selected)); }
+
+  render();
+  return { root, selected, refresh: render, clearSelection() { selected.clear(); render(); } };
+}
+
+/* ======================================================================
+   SPALTENDEFINITIONEN
+   ====================================================================== */
+const projectColumns = [
+  { key: "msdyn_subject", label: "Projekt", cls: "subject",
+    sortValue: r => (r.msdyn_subject || "").toLowerCase(),
+    render: r => esc(store.projectLabel.get(r.msdyn_projectid) || r.msdyn_subject || "") },
+  { key: "msdyn_scheduledstart", label: "Geplanter Start",
+    sortValue: r => r.msdyn_scheduledstart || "",
+    render: r => esc(fmtDate(r, "msdyn_scheduledstart")) },
+  { key: "msdyn_finish", label: "Ende",
+    sortValue: r => r.msdyn_finish || "",
+    render: r => esc(fmtDate(r, "msdyn_finish")) },
+  { key: "msdyn_progress", label: "Fortschritt", cls: "num",
+    sortValue: r => (r.msdyn_progress === null || r.msdyn_progress === undefined ? "" : r.msdyn_progress),
+    render: r => esc(fmtProgress(r.msdyn_progress)) }
+];
+
+function taskColumns(withProject) {
+  const cols = [
+    { key: "msdyn_subject", label: "Aufgabe", cls: "subject",
+      sortValue: r => (r.msdyn_subject || "").toLowerCase(),
+      render: r => esc(r.msdyn_subject || "") }
+  ];
+  if (withProject) cols.push({ key: "__project", label: "Projekt",
+    sortValue: r => (r.__projectLabel || "").toLowerCase(),
+    render: r => esc(r.__projectLabel || "") });
+  cols.push(
+    { key: "bucket", label: "Bucket",
+      sortValue: r => (r["_msdyn_projectbucket_value" + FV] || "").toLowerCase(),
+      render: r => esc(r["_msdyn_projectbucket_value" + FV] || "") },
+    { key: "msdyn_scheduledstart", label: "Startdatum",
+      sortValue: r => r.msdyn_scheduledstart || "",
+      render: r => esc(fmtDate(r, "msdyn_scheduledstart")) },
+    { key: "msdyn_scheduledend", label: "Enddatum",
+      sortValue: r => r.msdyn_scheduledend || "",
+      render: r => esc(fmtDate(r, "msdyn_scheduledend")) },
+    { key: "msdyn_priority", label: "Priorität", cls: "num",
+      sortValue: r => (r.msdyn_priority === null || r.msdyn_priority === undefined ? "" : r.msdyn_priority),
+      render: r => (r.msdyn_priority === null || r.msdyn_priority === undefined ? "" : esc(r.msdyn_priority)) },
+    { key: "msdyn_progress", label: "Fortschritt", cls: "num",
+      sortValue: r => (r.msdyn_progress === null || r.msdyn_progress === undefined ? "" : r.msdyn_progress),
+      render: r => esc(fmtProgress(r.msdyn_progress)) }
+  );
+  return cols;
+}
+
+/* ======================================================================
+   MASSENBEARBEITUNG
+   ====================================================================== */
+let pendingTasks = [];      // die aktuell im Dialog bearbeiteten Aufgaben
+let afterWriteRefresh = null;
+
+function openBulkEdit(ids, onDone) {
+  pendingTasks = ids.map(id => store.tasks.find(t => t.msdyn_projecttaskid === id)).filter(Boolean);
+  afterWriteRefresh = onDone;
+  if (!pendingTasks.length) return;
+
+  const dlg = $("#editDlg");
+  $("#edStart").value = "";
+  $("#edEnd").value = "";
+  $("#editMsg").innerHTML = "";
+  const projCount = new Set(pendingTasks.map(t => t._msdyn_project_value)).size;
+  $("#editCount").textContent =
+    pendingTasks.length.toLocaleString("de-DE") + " Aufgabe" + (pendingTasks.length === 1 ? "" : "n") +
+    " aus " + projCount + " Projekt" + (projCount === 1 ? "" : "en") + " ausgewählt.";
+  validateEdit();
+  dlg.showModal();
+}
+
+function validateEdit() {
+  const s = $("#edStart").value, e = $("#edEnd").value;
+  const msg = $("#editMsg");
+  msg.innerHTML = "";
+
+  if (!s && !e) { $("#edSave").disabled = true; return; }
+
+  if (s && e && e < s) {
+    msg.innerHTML = '<div class="notice err" style="margin:14px 0 0">Das Enddatum liegt vor dem Startdatum.</div>';
+    $("#edSave").disabled = true; return;
+  }
+
+  // Nur ein Feld gesetzt: zeilenweise gegen den vorhandenen Wert prüfen.
+  const conflicts = [];
+  for (const t of pendingTasks) {
+    const ns = s || isoDay(t.msdyn_scheduledstart);
+    const ne = e || isoDay(t.msdyn_scheduledend);
+    if (ns && ne && ne < ns) conflicts.push(t);
+  }
+  if (conflicts.length) {
+    const list = conflicts.slice(0, 5)
+      .map(t => "<li>" + esc(t.msdyn_subject) + " (" + esc(fmtDate(t, "msdyn_scheduledstart")) +
+                " – " + esc(fmtDate(t, "msdyn_scheduledend")) + ")</li>").join("");
+    msg.innerHTML = '<div class="notice err" style="margin:14px 0 0">Bei <strong>' + conflicts.length +
+      "</strong> ausgewählten Aufgaben ergäbe sich ein Enddatum vor dem Startdatum:<ul>" + list +
+      (conflicts.length > 5 ? "<li>… und " + (conflicts.length - 5) + " weitere</li>" : "") +
+      "</ul>Bitte beide Felder füllen oder die Auswahl anpassen.</div>";
+    $("#edSave").disabled = true; return;
+  }
+  $("#edSave").disabled = false;
+}
+
+function buildConfirm(startDate, endDate) {
+  const byProj = new Map();
+  for (const t of pendingTasks) {
+    const k = t.__projectLabel || "(ohne Projekt)";
+    byProj.set(k, (byProj.get(k) || 0) + 1);
+  }
+  const rows = Array.from(byProj.entries()).sort((a, b) => b[1] - a[1])
+    .map(([n, c]) => "<li>" + esc(n) + " – <strong>" + c + "</strong></li>").join("");
+  const sets = Array.from(byProj.keys()).length;
+  const blocks = Array.from(byProj.values()).reduce((a, c) => a + Math.ceil(c / CONFIG.maxOpsPerSet), 0);
+
+  $("#confirmBody").innerHTML =
+    "<p style='margin:0 0 12px'>Es werden <strong>" + pendingTasks.length.toLocaleString("de-DE") +
+      " Aufgaben</strong> in <strong>" + sets + " Projekt" + (sets === 1 ? "" : "en") + "</strong> geändert:</p>" +
+    (startDate ? "<p style='margin:0 0 4px'>Startdatum → <strong>" + esc(de(startDate)) + "</strong></p>" : "") +
+    (endDate   ? "<p style='margin:0 0 4px'>Enddatum → <strong>"  + esc(de(endDate))   + "</strong></p>" : "") +
+    (!startDate ? "<p style='margin:0 0 4px;color:#6b7684'>Startdatum bleibt unverändert.</p>" : "") +
+    (!endDate   ? "<p style='margin:0 0 4px;color:#6b7684'>Enddatum bleibt unverändert.</p>" : "") +
+    '<div class="notice warn" style="margin:14px 0">Die Planungs-Engine rechnet den Zeitplan neu. Termine können auf Arbeitstage gerückt werden, <strong>abhängige Aufgaben und das Projektende können sich mit verschieben</strong>. Der Vorgang lässt sich nicht rückgängig machen.</div>' +
+    '<div class="notice info" style="margin:0 0 12px">Die aktuellen Werte werden vor dem Schreiben automatisch als CSV-Datei heruntergeladen.</div>' +
+    "<p style='margin:0 0 6px;color:#6b7684;font-size:12.5px'>Verarbeitung in " + blocks +
+      " Block" + (blocks === 1 ? "" : "en") + " à maximal " + CONFIG.maxOpsPerSet + " Operationen.</p>" +
+    "<ul style='margin:0;padding-left:18px;color:#6b7684;font-size:12.5px'>" + rows + "</ul>";
+}
+
+function downloadBackupCsv() {
+  const head = ["Aufgaben-ID", "Projekt", "Aufgabe", "Startdatum (vorher)", "Enddatum (vorher)"];
+  const lines = [head.join(";")];
+  for (const t of pendingTasks) {
+    lines.push([
+      t.msdyn_projecttaskid,
+      '"' + String(t.__projectLabel || "").replace(/"/g, '""') + '"',
+      '"' + String(t.msdyn_subject || "").replace(/"/g, '""') + '"',
+      isoDay(t.msdyn_scheduledstart),
+      isoDay(t.msdyn_scheduledend)
+    ].join(";"));
+  }
+  const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+  // BOM voranstellen, damit Excel die Umlaute korrekt liest
+  const blob = new Blob(["﻿" + lines.join("\r\n")], { type: "text/csv;charset=utf-8" });
+  const a = el("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "aufgaben-vorher-" + stamp + ".csv";
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+}
+
+async function pollOperationSet(id) {
+  const deadline = Date.now() + CONFIG.pollTimeoutMs;
+  while (Date.now() < deadline) {
+    await sleep(2000);
+    const r = await dv("msdyn_operationsets(" + id + ")?$select=msdyn_status,_msdyn_psserrorlog_value");
+    if (OS_TERMINAL.includes(r.msdyn_status))
+      return { code: r.msdyn_status, label: OS_STATUS[r.msdyn_status], errorLog: r._msdyn_psserrorlog_value };
+  }
+  return { code: null, label: "Zeitüberschreitung" };
+}
+
+async function writeBulk(startDate, endDate) {
+  const startIso = startDate ? startDate + "T" + CONFIG.startTimeUtc + "Z" : null;
+  const endIso   = endDate   ? endDate   + "T" + CONFIG.endTimeUtc   + "Z" : null;
+
+  // Nach Projekt gruppieren – ein OperationSet gehört zu genau einem Projekt.
+  const groups = new Map();
+  for (const t of pendingTasks) {
+    const p = t._msdyn_project_value;
+    if (!groups.has(p)) groups.set(p, []);
+    groups.get(p).push(t);
+  }
+
+  const results = [];
+  let doneOps = 0;
+  const totalOps = pendingTasks.length;
+  const stamp = new Date().toLocaleString("de-DE");
+
+  for (const [projectId, list] of groups) {
+    const label = store.projectLabel.get(projectId) || projectId;
+    for (let i = 0; i < list.length; i += CONFIG.maxOpsPerSet) {
+      const chunk = list.slice(i, i + CONFIG.maxOpsPerSet);
+      let osId = null;
+      try {
+        overlay(true, "Übergabe an die Planung – " + label + " (" +
+                doneOps.toLocaleString("de-DE") + " von " + totalOps.toLocaleString("de-DE") + ")");
+
+        const os = await dv("msdyn_CreateOperationSetV1", { method: "POST", body: {
+          ProjectId: projectId,
+          Description: "Massenbearbeitung Termine – " + stamp
+        }});
+        osId = os.OperationSetId;
+
+        await mapLimit(chunk, CONFIG.writeParallel, async t => {
+          const entity = {
+            "@odata.type": "Microsoft.Dynamics.CRM.msdyn_projecttask",
+            msdyn_projecttaskid: t.msdyn_projecttaskid
+          };
+          if (startIso) entity.msdyn_scheduledstart = startIso;
+          if (endIso)   entity.msdyn_scheduledend   = endIso;
+          await dv("msdyn_PssUpdateV1", { method: "POST", body: { Entity: entity, OperationSetId: osId } });
+        });
+
+        await dv("msdyn_ExecuteOperationSetV1", { method: "POST", body: { OperationSetId: osId } });
+
+        overlay(true, "Die Planung verarbeitet die Änderung – " + label + " …");
+        const st = await pollOperationSet(osId);
+        doneOps += chunk.length;
+        results.push({ project: label, count: chunk.length, status: st });
+      } catch (err) {
+        if (osId) {
+          try { await dv("msdyn_AbandonOperationSetV1", { method: "POST", body: { OperationSetId: osId } }); }
+          catch (_) {}
+        }
+        results.push({ project: label, count: chunk.length, error: err.message });
+      }
+    }
+  }
+  return { results, startDate, endDate };
+}
+
+function reportResult(run, before) {
+  const ok = run.results.filter(r => r.status && r.status.code === 192350003);
+  const failed = run.results.filter(r => r.error || (r.status && r.status.code === 192350004));
+  const pending = run.results.filter(r => r.status && r.status.code === null);
+
+  // Abweichungen: Wunschdatum gegen tatsächlichen Wert nach dem Neuladen
+  const deviations = [];
+  for (const b of before) {
+    const now = store.tasks.find(t => t.msdyn_projecttaskid === b.id);
+    if (!now) continue;
+    if (run.startDate && isoDay(now.msdyn_scheduledstart) !== run.startDate)
+      deviations.push({ t: now, feld: "Start", soll: run.startDate, ist: isoDay(now.msdyn_scheduledstart) });
+    if (run.endDate && isoDay(now.msdyn_scheduledend) !== run.endDate)
+      deviations.push({ t: now, feld: "Ende", soll: run.endDate, ist: isoDay(now.msdyn_scheduledend) });
+  }
+
+  let html = "";
+  const affected = new Set(deviations.map(d => d.t.msdyn_projecttaskid));
+
+  if (ok.length && !failed.length && !pending.length) {
+    const n = ok.reduce((a, c) => a + c.count, 0);
+    // Erfolgsmeldung nur, wenn die Engine die Wunschtermine auch übernommen hat.
+    html += affected.size
+      ? '<div class="notice warn"><strong>' + n.toLocaleString("de-DE") +
+        " Aufgaben wurden verarbeitet – bei " + affected.size.toLocaleString("de-DE") +
+        " davon hat die Planung ein abweichendes Datum gesetzt.</strong></div>"
+      : '<div class="notice ok"><strong>' + n.toLocaleString("de-DE") +
+        " Aufgaben wurden aktualisiert.</strong></div>";
+  }
+  if (failed.length) {
+    html += '<div class="notice err"><strong>Nicht gespeichert:</strong><ul>' +
+      failed.map(r => "<li>" + esc(r.project) + " (" + r.count + " Aufgaben): " +
+        esc(r.error || (r.status && r.status.label) || "Fehler") + "</li>").join("") +
+      "</ul>Details unter <em>Einstellungen → Zeitplanintegration → Vorgangsgruppen</em> bzw. <em>PSS-Fehlerprotokolle</em>.</div>";
+  }
+  if (pending.length) {
+    html += '<div class="notice warn">Bei ' + pending.reduce((a, c) => a + c.count, 0) +
+      " Aufgaben läuft die Verarbeitung noch. Bitte in einigen Minuten aktualisieren.</div>";
+  }
+  if (deviations.length) {
+    const list = deviations.slice(0, 8).map(d =>
+      "<li>" + esc(d.t.msdyn_subject) + " – " + d.feld + ": angefordert " + esc(de(d.soll)) +
+      ", gesetzt " + esc(de(d.ist) || "—") + "</li>").join("");
+    html += '<div class="notice warn"><strong>Abweichungen im Einzelnen</strong>' +
+      " – Ursache sind in der Regel Arbeitstage, Kalender oder Abhängigkeiten:<ul>" +
+      list + (deviations.length > 8 ? "<li>… und " + (deviations.length - 8) + " weitere</li>" : "") + "</ul></div>";
+  }
+  return html;
+}
+
+/* ======================================================================
+   ANSICHTEN
+   ====================================================================== */
+let lastResultHtml = "";
+
+function viewProjects() {
+  const v = $("#view");
+  v.innerHTML = "";
+  v.appendChild(el("div", { class: "page-head" },
+    "<div><h1>Projekte</h1><div class='sub'>" + store.projects.length +
+    " Projekte · Klicken Sie eine Zeile an, um die Details zu öffnen.</div></div>" +
+    "<button class='btn' data-role='reload'>Aktualisieren</button>"));
+
+  const tbl = createTable({
+    columns: projectColumns,
+    rows: store.projects,
+    getId: r => r.msdyn_projectid,
+    searchFields: [r => store.projectLabel.get(r.msdyn_projectid)],
+    searchPlaceholder: "Projekt suchen …",
+    defaultSort: "msdyn_subject",
+    onRowClick: id => { location.hash = "#/projekte/" + id; }
+  });
+  v.appendChild(tbl.root);
+}
+
+function viewProjectDetail(projectId, tab) {
+  const p = store.projects.find(x => x.msdyn_projectid === projectId);
+  const v = $("#view");
+  v.innerHTML = "";
+  if (!p) {
+    v.innerHTML = '<div class="notice err">Projekt nicht gefunden.</div>' +
+                  '<a class="btn" href="#/projekte">Zur Übersicht</a>';
+    return;
+  }
+
+  v.appendChild(el("div", { class: "page-head" },
+    "<div><a class='btn ghost' href='#/projekte' style='padding-left:0'>← Projekte</a>" +
+    "<h1>" + esc(store.projectLabel.get(projectId)) + "</h1></div>" +
+    "<button class='btn' data-role='reload'>Aktualisieren</button>"));
+
+  const tabs = el("div", { class: "tabs" },
+    "<button data-tab='informationen'" + (tab !== "aufgaben" ? " class='active'" : "") + ">Informationen</button>" +
+    "<button data-tab='aufgaben'" + (tab === "aufgaben" ? " class='active'" : "") + ">Aufgaben</button>");
+  tabs.addEventListener("click", ev => {
+    const b = ev.target.closest("button[data-tab]");
+    if (b) location.hash = "#/projekte/" + projectId + "/" + b.dataset.tab;
+  });
+  v.appendChild(tabs);
+
+  if (tab !== "aufgaben") {
+    v.appendChild(el("div", { class: "panel" },
+      '<div class="form">' +
+      field("Projektname", store.projectLabel.get(projectId)) +
+      field("Geplanter Start", fmtDate(p, "msdyn_scheduledstart")) +
+      field("Ende", fmtDate(p, "msdyn_finish")) +
+      field("Fortschritt", fmtProgress(p.msdyn_progress)) +
+      "</div>"));
+    return;
+  }
+
+  const rows = store.byProject.get(projectId) || [];
+  if (lastResultHtml) { v.appendChild(el("div", {}, lastResultHtml)); lastResultHtml = ""; }
+
+  const tbl = createTable({
+    columns: taskColumns(false),
+    rows,
+    getId: r => r.msdyn_projecttaskid,
+    selectable: true,
+    searchFields: ["msdyn_subject", r => r["_msdyn_projectbucket_value" + FV]],
+    searchPlaceholder: "Aufgabe oder Bucket suchen …",
+    defaultSort: "msdyn_scheduledstart",
+    emptyText: "Dieses Projekt hat keine Aufgaben.",
+    onEdit: ids => openBulkEdit(ids, () => { tbl.clearSelection(); route(); })
+  });
+  v.appendChild(tbl.root);
+}
+
+function field(label, value) {
+  return '<div class="field"><label>' + esc(label) + "</label>" +
+         '<input type="text" readonly value="' + esc(value) + '"></div>';
+}
+
+function viewTasks() {
+  const v = $("#view");
+  v.innerHTML = "";
+  v.appendChild(el("div", { class: "page-head" },
+    "<div><h1>Projektaufgaben</h1><div class='sub'>" +
+    store.tasks.length.toLocaleString("de-DE") + " Aufgaben aus allen Projekten</div></div>" +
+    "<button class='btn' data-role='reload'>Aktualisieren</button>"));
+
+  if (lastResultHtml) { v.appendChild(el("div", {}, lastResultHtml)); lastResultHtml = ""; }
+
+  const tbl = createTable({
+    columns: taskColumns(true),
+    rows: store.tasks,
+    getId: r => r.msdyn_projecttaskid,
+    selectable: true,
+    searchFields: ["msdyn_subject", "__projectLabel", r => r["_msdyn_projectbucket_value" + FV]],
+    searchPlaceholder: "Aufgabe, Projekt oder Bucket suchen …",
+    defaultSort: "msdyn_subject",
+    onEdit: ids => openBulkEdit(ids, () => { tbl.clearSelection(); route(); })
+  });
+  v.appendChild(tbl.root);
+}
+
+/* ======================================================================
+   ROUTING
+   ====================================================================== */
+function route() {
+  const h = location.hash.replace(/^#\/?/, "");
+  const parts = h.split("/").filter(Boolean);
+  document.querySelectorAll("nav a").forEach(a => a.classList.remove("active"));
+
+  if (parts[0] === "aufgaben") {
+    $('nav a[data-nav=aufgaben]').classList.add("active");
+    viewTasks();
+  } else if (parts[0] === "projekte" && parts[1]) {
+    $('nav a[data-nav=projekte]').classList.add("active");
+    viewProjectDetail(parts[1], parts[2]);
+  } else {
+    $('nav a[data-nav=projekte]').classList.add("active");
+    viewProjects();
+  }
+  window.scrollTo(0, 0);
+}
+
+/* ======================================================================
+   START
+   ====================================================================== */
+document.addEventListener("click", async ev => {
+  if (ev.target.dataset && ev.target.dataset.role === "reload") {
+    await loadData(); route();
+  }
+});
+
+$("#edStart").addEventListener("input", validateEdit);
+$("#edEnd").addEventListener("input", validateEdit);
+$("#logout").addEventListener("click", () => pca.logoutRedirect());
+
+// Abbrechen schließt nur – es passiert nichts.
+$("#edCancel").addEventListener("click", () => $("#editDlg").close());
+$("#cfCancel").addEventListener("click", () => $("#confirmDlg").close());
+
+// Bestätigungsdialog anzeigen und auf die Entscheidung warten.
+function askConfirm() {
+  return new Promise(resolve => {
+    const cd = $("#confirmDlg"), go = $("#cfGo");
+    const finish = ok => { go.removeEventListener("click", onGo);
+                           cd.removeEventListener("close", onClose);
+                           if (cd.open) cd.close();
+                           resolve(ok); };
+    const onGo = () => finish(true);
+    const onClose = () => finish(false);   // Abbrechen oder Escape
+    go.addEventListener("click", onGo);
+    cd.addEventListener("close", onClose);
+    cd.showModal();
+  });
+}
+
+$("#edSave").addEventListener("click", async () => {
+  if ($("#edSave").disabled) return;
+  const startDate = $("#edStart").value || null;
+  const endDate   = $("#edEnd").value || null;
+  $("#editDlg").close();
+
+  buildConfirm(startDate, endDate);
+  if (!(await askConfirm())) return;
+
+  const before = pendingTasks.map(t => ({ id: t.msdyn_projecttaskid }));
+  downloadBackupCsv();
+
+  try {
+    const run = await writeBulk(startDate, endDate);
+    overlay(true, "Daten werden neu geladen …");
+    await loadData();
+    lastResultHtml = reportResult(run, before);
+  } catch (err) {
+    lastResultHtml = '<div class="notice err"><strong>Fehler:</strong> ' + esc(err.message) + "</div>";
+    overlay(false);
+  }
+  if (afterWriteRefresh) afterWriteRefresh(); else route();
+});
+
+function fatal(title, detail, hint) {
+  document.getElementById("boot").innerHTML =
+    '<div class="panel card" style="text-align:left">' +
+    '<img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAZAAAAChCAMAAADeMBlCAAAAXVBMVEVHcEz///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////+EHRzTAAAAHnRSTlMAd/BEgCJmwLtAECDd0KARMGDu4LAzzFBVkJlwiKrBxjMzAAAACXBIWXMAAALuAAAC7gGSzXdzAAAKo0lEQVR4nO2d2ZazKhCFnWPMoJnH5v0f8ywUpZghMWn+07UverWioPVJAQWa5G3tsu79TFCzaUdItkJzxqMFIWT5140QkxBIZEIgkQmBRCYEEpkQSGRCIJEJgUQmBBKZEEhkQiCRCYFEJgQSmRBIZEIgkQmBRCYKpPnrRohJFMhft0FUQiCRCYFEJgQSmRBIZEIgkQmBRCYEEpkQSGRCIJEJgUSmEUiz2xByxKjWr2sA0m0zQpVh4Pe3RYHQyjGq+Nvm+H0tiKQFuq1fVPPIRhybXfMY3Nblz5rjt7XcjjSybf9eW3fot25/2iq/pVVxAJWDXUQzINrgS27f1uUIWg5Y9i5Dt/V1gcqxOMgDw27oct2wbf+WeOXIbivNSH10W/i29De0uk3dqsUuMYROLoPb2v0fDRCXdtOo41Cwdlsby1oNbmuLbuuTApXjyNtsQ3DxNmBDt/UpNTw8MlWOXqZo7+C2yOOfvutoNcYOqRuSOrTG8PtqcG8YAJ5dsHI8FPNa5kMKdFsf0BJUDl1s3TZBtRxOxQDwbGoePDyiVo5e1hnDZnBbGACeR0rsUCfHFO4D561m0uqhiR1q5JpTZwFgdFvvCYRHzJWjl3ORQzNktcAA8MuCsUNn+MNj1QnOW70lMXbolM8yoDEAHPFdR6td5l85enmty8J5q1e11IZHbPJcKIfzVq9pIccOnfJdudhhAPgVUfN6V45e3ktJmxvOW4UrfKVuwBk4bxWujwLBeatwhQPZBJ0xuK3tZ2/i/6QwIKvdMGYJMMDgtrD766sAIN1tnCY5hJTQHPDjKAHyBNJc+CwJIWH9JvxaTYh8gKwecMX75hHYj0UgIXICWd4OHEa2tQXmDUIgIbLP/+2OwFEdbhazNkfDBCMCCZMZSPcAr0mR48PaUWo25gEgAgmRAchlKziq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" alt="TeGA-Plan" style="margin-bottom:18px">' +
+    '<div class="notice err"><strong>' + esc(title) + "</strong><br>" + esc(detail) + "</div>" +
+    (hint || "") + "</div>";
+}
+
+(async function start() {
+  try {
+    if (!(await initAuth())) return;      // Weiterleitung zur Anmeldung läuft
+  } catch (err) {
+    fatal("Anmeldung fehlgeschlagen", err.message,
+      '<p class="sub">Prüfen Sie, ob in der App-Registrierung <code>' + esc(CONFIG.clientId) +
+      '</code> unter <em>Authentifizierung</em> eine Plattform <strong>Einzelseitige Anwendung (SPA)</strong> ' +
+      'mit genau dieser Umleitungs-URI eingetragen ist:</p><p class="mono">' + esc(REDIRECT_URI) + "</p>");
+    return;
+  }
+  try {
+    document.getElementById("boot").hidden = true;
+    document.getElementById("app").hidden = false;
+    await loadData();
+    window.addEventListener("hashchange", route);
+    route();
+  } catch (err) {
+    overlay(false);
+    document.getElementById("app").hidden = true;
+    document.getElementById("boot").hidden = false;
+    fatal("Daten konnten nicht geladen werden", err.message,
+      '<p class="sub">Häufigste Ursache: Der angemeldete Benutzer besitzt keine Dataverse-Sicherheitsrolle mit Leserechten auf <code>msdyn_project</code> und <code>msdyn_projecttask</code>.</p>');
+  }
+})();
+</script>
+</body>
+</html>
