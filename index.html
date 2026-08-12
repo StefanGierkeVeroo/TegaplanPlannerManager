@@ -85,6 +85,14 @@ td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
 td.check,th.check{width:38px;padding-right:0}
 input[type=checkbox]{width:15px;height:15px;accent-color:var(--accent);cursor:pointer;margin:0;vertical-align:middle}
 .empty{padding:40px;text-align:center;color:var(--muted)}
+tbody tr.gesperrt td{color:#7a838f}
+tbody tr.gesperrt:hover{background:transparent}
+.chip{display:inline-block;font-size:11px;font-weight:600;line-height:1.5;padding:0 7px;
+  border-radius:10px;background:var(--warn-soft);color:var(--warn);border:1px solid #fedf89;
+  vertical-align:1px;white-space:nowrap}
+.chip-mild{background:#f1f3f6;color:var(--muted);border-color:var(--line-strong)}
+.hinweis{padding:9px 14px;border-bottom:1px solid var(--line);background:#fbfcfd;
+  color:var(--muted);font-size:12.5px}
 
 /* -------------------------------------------------------------- Paginator */
 .pager{display:flex;align-items:center;gap:8px;padding:10px 14px;color:var(--muted);font-size:12.5px}
@@ -383,7 +391,12 @@ async function dvAll(path, onProgress) {
    ====================================================================== */
 const PROJECT_SELECT = "msdyn_projectid,msdyn_subject,msdyn_scheduledstart,msdyn_finish,msdyn_progress";
 const TASK_SELECT = "msdyn_projecttaskid,msdyn_subject,_msdyn_projectbucket_value," +
-                    "msdyn_scheduledstart,msdyn_scheduledend,msdyn_priority,msdyn_progress,_msdyn_project_value";
+                    "msdyn_scheduledstart,msdyn_scheduledend,msdyn_priority,msdyn_progress," +
+                    "_msdyn_project_value,msdyn_ismanual,msdyn_summary";
+
+// Bei manuell geplanten Aufgaben sind msdyn_scheduledstart/-end von der
+// Scheduling-Engine schreibgeschuetzt (E_NOTEDITABLE). Nachgewiesen am 12.08.2026.
+const istBearbeitbar = t => t.msdyn_ismanual !== true;
 
 const store = { projects: [], tasks: [], byProject: new Map(), projectLabel: new Map() };
 
@@ -458,8 +471,11 @@ function createTable(opt) {
     if (state.page >= pages) state.page = pages - 1;
     const slice = rows.slice(state.page * CONFIG.pageSize, (state.page + 1) * CONFIG.pageSize);
 
-    const allFilteredSelected = opt.selectable && rows.length > 0 &&
-      rows.every(r => selected.has(opt.getId(r)));
+    const selectableRows = opt.selectable
+      ? rows.filter(r => !opt.canSelect || opt.canSelect(r)) : [];
+    const gesperrt = opt.selectable ? rows.length - selectableRows.length : 0;
+    const allFilteredSelected = selectableRows.length > 0 &&
+      selectableRows.every(r => selected.has(opt.getId(r)));
 
     let html = '<div class="toolbar">';
     html += '<div class="search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">' +
@@ -479,6 +495,13 @@ function createTable(opt) {
       rows.length.toLocaleString("de-DE") + " von " + opt.rows.length.toLocaleString("de-DE") +
       " Datensätzen</span></div>";
 
+    if (gesperrt > 0) {
+      html += '<div class="hinweis">' + gesperrt.toLocaleString("de-DE") +
+        " der angezeigten Aufgaben sind <strong>manuell geplant</strong> und daher nicht auswählbar – " +
+        "ihre Termine sind über die Schnittstelle schreibgeschützt und lassen sich nur in " +
+        "Project for the Web ändern.</div>";
+    }
+
     html += '<div class="tablewrap"><table><thead><tr>';
     if (opt.selectable)
       html += '<th class="check"><input type="checkbox" data-role="all" title="Alle Treffer auswählen"' +
@@ -497,10 +520,13 @@ function createTable(opt) {
       for (const r of slice) {
         const id = opt.getId(r);
         const isSel = selected.has(id);
+        const waehlbar = !opt.canSelect || opt.canSelect(r);
         html += '<tr data-id="' + esc(id) + '" class="' + (isSel ? "sel " : "") +
-                (opt.onRowClick ? "clickable" : "") + '">';
+                (waehlbar ? "" : "gesperrt ") + (opt.onRowClick ? "clickable" : "") + '">';
         if (opt.selectable)
-          html += '<td class="check"><input type="checkbox" data-role="row"' + (isSel ? " checked" : "") + "></td>";
+          html += '<td class="check"><input type="checkbox" data-role="row"' +
+                  (isSel ? " checked" : "") + (waehlbar ? "" : ' disabled title="Manuell geplant – Termine sind schreibgeschützt"') +
+                  "></td>";
         for (const c of opt.columns) html += '<td class="' + (c.cls || "") + '">' + c.render(r) + "</td>";
         html += "</tr>";
       }
@@ -541,7 +567,8 @@ function createTable(opt) {
     if (role === "clear") { selected.clear(); notify(); render(); return; }
     if (role === "edit") { opt.onEdit(Array.from(selected)); return; }
     if (role === "all") {
-      const rows = filtered();
+      // Erfasst alle Treffer des Filters – aber nur die bearbeitbaren.
+      const rows = filtered().filter(r => !opt.canSelect || opt.canSelect(r));
       const on = ev.target.checked;
       for (const r of rows) { const id = opt.getId(r); if (on) selected.add(id); else selected.delete(id); }
       notify(); render(); return;
@@ -584,7 +611,11 @@ function taskColumns(withProject) {
   const cols = [
     { key: "msdyn_subject", label: "Aufgabe", cls: "subject",
       sortValue: r => (r.msdyn_subject || "").toLowerCase(),
-      render: r => esc(r.msdyn_subject || "") }
+      render: r => esc(r.msdyn_subject || "") +
+        (r.msdyn_ismanual === true
+          ? ' <span class="chip" title="Manuell geplant – Termine sind über die Schnittstelle schreibgeschützt">manuell</span>' : "") +
+        (r.msdyn_summary === true
+          ? ' <span class="chip chip-mild" title="Sammelaufgabe – die Termine leiten sich aus den Unteraufgaben ab">Sammelaufgabe</span>' : "") }
   ];
   if (withProject) cols.push({ key: "__project", label: "Projekt",
     sortValue: r => (r.__projectLabel || "").toLowerCase(),
@@ -616,7 +647,10 @@ let pendingTasks = [];      // die aktuell im Dialog bearbeiteten Aufgaben
 let afterWriteRefresh = null;
 
 function openBulkEdit(ids, onDone) {
-  pendingTasks = ids.map(id => store.tasks.find(t => t.msdyn_projecttaskid === id)).filter(Boolean);
+  // Sicherheitsnetz: manuell geplante Aufgaben nie in einen OperationSet lassen.
+  // Ein einziger abgewiesener Datensatz laesst den gesamten Set scheitern.
+  pendingTasks = ids.map(id => store.tasks.find(t => t.msdyn_projecttaskid === id))
+                    .filter(t => t && istBearbeitbar(t));
   afterWriteRefresh = onDone;
   if (!pendingTasks.length) return;
 
@@ -674,6 +708,7 @@ function buildConfirm(startDate, endDate) {
     .map(([n, c]) => "<li>" + esc(n) + " – <strong>" + c + "</strong></li>").join("");
   const sets = Array.from(byProj.keys()).length;
   const blocks = Array.from(byProj.values()).reduce((a, c) => a + Math.ceil(c / CONFIG.maxOpsPerSet), 0);
+  const sammel = pendingTasks.filter(t => t.msdyn_summary === true).length;
 
   $("#confirmBody").innerHTML =
     "<p style='margin:0 0 12px'>Es werden <strong>" + pendingTasks.length.toLocaleString("de-DE") +
@@ -683,6 +718,9 @@ function buildConfirm(startDate, endDate) {
     (!startDate ? "<p style='margin:0 0 4px;color:#6b7684'>Startdatum bleibt unverändert.</p>" : "") +
     (!endDate   ? "<p style='margin:0 0 4px;color:#6b7684'>Enddatum bleibt unverändert.</p>" : "") +
     '<div class="notice warn" style="margin:14px 0">Die Planungs-Engine rechnet den Zeitplan neu. Termine können auf Arbeitstage gerückt werden, <strong>abhängige Aufgaben und das Projektende können sich mit verschieben</strong>. Der Vorgang lässt sich nicht rückgängig machen.</div>' +
+    (sammel ? '<div class="notice warn" style="margin:14px 0"><strong>' + sammel +
+      " der ausgewählten Aufgaben sind Sammelaufgaben.</strong> Deren Termine leiten sich aus den " +
+      "Unteraufgaben ab – die Planung kann die Eingabe daher überschreiben.</div>" : "") +
     '<div class="notice info" style="margin:0 0 12px">Die aktuellen Werte werden vor dem Schreiben automatisch als CSV-Datei heruntergeladen.</div>' +
     "<p style='margin:0 0 6px;color:#6b7684;font-size:12.5px'>Verarbeitung in " + blocks +
       " Block" + (blocks === 1 ? "" : "en") + " à maximal " + CONFIG.maxOpsPerSet + " Operationen.</p>" +
@@ -709,6 +747,37 @@ function downloadBackupCsv() {
   a.download = "aufgaben-vorher-" + stamp + ".csv";
   document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+}
+
+/*
+  Zerlegt die mehrfach verschachtelte Fehlermeldung der Schedule-API in einen
+  lesbaren Satz. Der Rohtext enthaelt JSON in JSON und ist unzumutbar.
+*/
+function erklaereFehler(raw, chunk) {
+  const alle = name => {
+    const out = [], re = new RegExp('\\\\*"' + name + '\\\\*"\\s*:\\s*\\\\*"([^"\\\\]+)', "g");
+    let m; while ((m = re.exec(raw))) out.push(m[1]);
+    return out;
+  };
+  const keys = alle("errorKey");
+  const key  = keys.find(k => k !== "E_BATCHFAILED") || keys[0] || null;
+  const feld = alle("field")[0] || null;
+  const id   = (alle("element")[0] || "").toLowerCase();
+
+  const task = chunk.find(t => t.msdyn_projecttaskid.toLowerCase() === id);
+  const name = task ? "„" + task.msdyn_subject + "“"
+                    : (id ? "Datensatz " + id : "einer Aufgabe");
+  const feldName = { scheduledStart: "Startdatum", scheduledEnd: "Enddatum",
+                     start: "Startdatum", finish: "Enddatum" }[feld] || feld;
+
+  if (key === "E_NOTEDITABLE") {
+    return "Bei " + name + " ist das " + (feldName || "Feld") + " schreibgeschützt. " +
+      "Weil ein Vorgang nur vollständig gespeichert wird, blieben auch die übrigen " +
+      "Aufgaben dieses Blocks unverändert.";
+  }
+  const msg = alle("ErrorMessage").filter(m => m !== "One of the batch requests failed")[0];
+  if (msg) return "Bei " + name + ": " + msg;
+  return String(raw || "").replace(/\s+/g, " ").slice(0, 300);
 }
 
 async function pollOperationSet(id) {
@@ -775,7 +844,8 @@ async function writeBulk(startDate, endDate) {
           try { await dv("msdyn_AbandonOperationSetV1", { method: "POST", body: { OperationSetId: osId } }); }
           catch (_) {}
         }
-        results.push({ project: label, count: chunk.length, error: err.message });
+        results.push({ project: label, count: chunk.length,
+                       error: erklaereFehler(err.message, chunk) });
       }
     }
   }
@@ -900,6 +970,7 @@ function viewProjectDetail(projectId, tab) {
     rows,
     getId: r => r.msdyn_projecttaskid,
     selectable: true,
+    canSelect: istBearbeitbar,
     searchFields: ["msdyn_subject", r => r["_msdyn_projectbucket_value" + FV]],
     searchPlaceholder: "Aufgabe oder Bucket suchen …",
     defaultSort: "msdyn_scheduledstart",
@@ -929,6 +1000,7 @@ function viewTasks() {
     rows: store.tasks,
     getId: r => r.msdyn_projecttaskid,
     selectable: true,
+    canSelect: istBearbeitbar,
     searchFields: ["msdyn_subject", "__projectLabel", r => r["_msdyn_projectbucket_value" + FV]],
     searchPlaceholder: "Aufgabe, Projekt oder Bucket suchen …",
     defaultSort: "msdyn_subject",
