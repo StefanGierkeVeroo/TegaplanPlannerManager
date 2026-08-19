@@ -51,6 +51,15 @@ h1{font-size:21px;margin:0 0 3px;font-weight:600;letter-spacing:-.2px}
 /* ---------------------------------------------------------------- Panels */
 .panel{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow)}
 .toolbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:12px 14px;border-bottom:1px solid var(--line)}
+.filters{display:flex;gap:10px 14px;align-items:flex-end;flex-wrap:wrap;
+  padding:12px 14px;border-bottom:1px solid var(--line);background:#fbfcfd}
+.filters .f{display:flex;flex-direction:column;gap:4px}
+.filters .f label{font-size:11.5px;color:var(--muted);font-weight:500}
+.filters select,.filters input[type=date]{padding:6px 9px;border:1px solid var(--line-strong);
+  border-radius:6px;background:#fff;font:inherit;font-size:13px;min-width:132px;color:inherit}
+.filters select:focus,.filters input[type=date]:focus{outline:2px solid var(--accent-soft);border-color:var(--accent)}
+.filters .fspacer{flex:1;min-width:0}
+.filters .fhint{flex-basis:100%;font-size:12px;color:var(--muted);line-height:1.5}
 .search{position:relative;flex:1;min-width:200px;max-width:380px}
 .search input{width:100%;padding:8px 12px 8px 32px;border:1px solid var(--line-strong);border-radius:6px;background:#fff}
 .search input:focus{outline:2px solid var(--accent-soft);border-color:var(--accent)}
@@ -122,6 +131,9 @@ dialog::backdrop{background:rgba(16,24,40,.45)}
 .dlg-body{padding:18px 22px}
 .dlg-foot{display:flex;justify-content:flex-end;gap:10px;padding:14px 22px 20px;border-top:1px solid var(--line);margin-top:6px}
 .dlg-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.dlg-grid .span2{grid-column:1 / -1}
+.field select{width:100%;padding:8px 11px;border:1px solid var(--line-strong);border-radius:6px;background:#fff;font:inherit;color:inherit}
+.field select:focus{outline:2px solid var(--accent-soft);border-color:var(--accent)}
 
 /* ---------------------------------------------------------------- Notices */
 .notice{border-radius:6px;padding:11px 14px;font-size:13px;margin:0 0 14px;border:1px solid}
@@ -186,10 +198,12 @@ dialog::backdrop{background:rgba(16,24,40,.45)}
       <p id="editCount"></p>
     </div>
     <div class="dlg-body">
-      <div class="notice info">Es werden ausschließlich <strong>Startdatum</strong> und <strong>Enddatum</strong> geändert. Ein leer gelassenes Feld bleibt in allen Datensätzen unverändert.</div>
+      <div class="notice info">Es werden ausschließlich <strong>Startdatum</strong>, <strong>Enddatum</strong> und <strong>Priorität</strong> geändert. Ein leer gelassenes Feld bleibt in allen Datensätzen unverändert.</div>
       <div class="dlg-grid">
         <div class="field"><label for="edStart">Startdatum</label><input type="date" id="edStart"></div>
         <div class="field"><label for="edEnd">Enddatum</label><input type="date" id="edEnd"></div>
+        <div class="field span2"><label for="edPrio">Priorität</label>
+          <select id="edPrio"><option value="">(unverändert)</option></select></div>
       </div>
       <div id="editMsg"></div>
     </div>
@@ -269,6 +283,39 @@ function fmtDate(row, col) {
 function fmtProgress(v) {
   if (v === null || v === undefined || v === "") return "";
   return (v * 100).toLocaleString("de-DE", { maximumFractionDigits: 1 }) + " %";
+}
+
+/* Priorität als Adjektiv statt als Zahl. Die Stufen sind fachlich vorgegeben:
+   1 = Dringend, 2–4 = Wichtig, 5–7 = Mittel, 8–10 = Niedrig.
+   Ein Wert außerhalb 1–10 wird als Zahl ausgegeben, damit er auffällt, statt
+   still in eine Stufe zu rutschen. Geprüft am 18.08.2026: im Bestand kommen
+   weder leere Werte noch Werte außerhalb 1–10 vor. */
+/* Die vier Stufen für den Bearbeitungsdialog. Geschrieben wird jeweils der
+   KLEINSTE Wert des Bereichs (so entschieden) – die Anzeige in der Tabelle
+   leitet sich umgekehrt aus dem Bereich ab, siehe fmtPrioritaet. Beide
+   Richtungen hängen an dieser einen Tabelle. */
+const PRIO_STUFEN = [
+  { wert: 1, text: "Dringend" },
+  { wert: 2, text: "Wichtig" },
+  { wert: 5, text: "Mittel" },
+  { wert: 8, text: "Niedrig" }
+];
+
+/* Beschriftung einer im Dialog gewählten Stufe. */
+function prioText(wert) {
+  const st = PRIO_STUFEN.find(x => x.wert === Number(wert));
+  return st ? st.text : String(wert);
+}
+
+function fmtPrioritaet(v) {
+  if (v === null || v === undefined || v === "") return "";
+  const n = Number(v);
+  if (!Number.isFinite(n)) return String(v);
+  if (n === 1) return "Dringend";
+  if (n >= 2 && n <= 4) return "Wichtig";
+  if (n >= 5 && n <= 7) return "Mittel";
+  if (n >= 8 && n <= 10) return "Niedrig";
+  return String(v);
 }
 // Datumsanteil eines Dataverse-Werts (die Felder liegen als 09:00Z/17:00Z vor)
 const isoDay = v => (v ? String(v).slice(0, 10) : "");
@@ -392,7 +439,11 @@ async function dvAll(path, onProgress) {
 const PROJECT_SELECT = "msdyn_projectid,msdyn_subject,msdyn_scheduledstart,msdyn_finish,msdyn_progress";
 const TASK_SELECT = "msdyn_projecttaskid,msdyn_subject,_msdyn_projectbucket_value," +
                     "msdyn_scheduledstart,msdyn_scheduledend,msdyn_priority,msdyn_progress," +
-                    "_msdyn_project_value,msdyn_ismanual,msdyn_summary";
+                    "_msdyn_project_value,msdyn_ismanual,msdyn_summary," +
+                    // Nur fuer den Zeitraumfilter. ACHTUNG: msdyn_start/msdyn_finish sind
+                    // bei manuell geplanten Aufgaben LEER (gepruefte 999 von 5.263 am
+                    // 18.08.2026) - siehe Hinweis in der Filterleiste.
+                    "msdyn_start,msdyn_finish";
 
 // Bei manuell geplanten Aufgaben sind msdyn_scheduledstart/-end von der
 // Scheduling-Engine schreibgeschuetzt (E_NOTEDITABLE). Nachgewiesen am 12.08.2026.
@@ -437,13 +488,30 @@ async function loadData() {
    TABELLE (Sortierung, Suche, Seitenwechsel, Auswahl)
    ====================================================================== */
 function createTable(opt) {
-  // opt: { columns, rows, getId, selectable, onRowClick, searchFields, emptyText, onSelectionChange }
-  const state = { q: "", sort: opt.defaultSort || null, dir: opt.defaultDir || "asc", page: 0 };
+  // opt: { columns, rows, getId, selectable, onRowClick, searchFields, emptyText,
+  //        onSelectionChange, filters, filterHint }
+  // filters: [{ key, label, type:'select'|'date', optionen(rows), test(row, wert) }]
+  const state = { q: "", sort: opt.defaultSort || null, dir: opt.defaultDir || "asc", page: 0, f: {} };
   const selected = new Set();
   const root = el("div", { class: "panel" });
 
+  /*
+    Wendet die gesetzten Filter an. Mit 'ausser' laesst sich einer auslassen -
+    so kann seine eigene Auswahlliste aus den Zeilen gebildet werden, welche die
+    UEBRIGEN Filter passieren. Dadurch zeigt z. B. die Bucket-Liste nur noch die
+    Buckets des gewaehlten Projekts.
+  */
+  function mitFiltern(rows, ausser) {
+    for (const f of (opt.filters || [])) {
+      if (f.key === ausser) continue;
+      const w = state.f[f.key];
+      if (w) rows = rows.filter(r => f.test(r, w));
+    }
+    return rows;
+  }
+
   function filtered() {
-    let rows = opt.rows;
+    let rows = mitFiltern(opt.rows);
     const q = state.q.trim().toLowerCase();
     if (q) rows = rows.filter(r => opt.searchFields.some(f => {
       const v = typeof f === "function" ? f(r) : r[f];
@@ -477,7 +545,40 @@ function createTable(opt) {
     const allFilteredSelected = selectableRows.length > 0 &&
       selectableRows.every(r => selected.has(opt.getId(r)));
 
-    let html = '<div class="toolbar">';
+    let html = "";
+
+    if (opt.filters && opt.filters.length) {
+      html += '<div class="filters">';
+      for (const f of opt.filters) {
+        const wert = state.f[f.key] || "";
+        html += '<div class="f"><label for="flt_' + f.key + '">' + esc(f.label) + '</label>';
+        if (f.type === "date") {
+          html += '<input type="date" id="flt_' + f.key + '" data-filter="' + f.key +
+                  '" value="' + esc(wert) + '">';
+        } else {
+          const werte = f.optionen(mitFiltern(opt.rows, f.key));
+          // Der gewaehlte Wert bleibt immer waehlbar, auch wenn ihn ein anderer
+          // Filter gerade aus der Liste draengt - sonst spraenge die Auswahl um.
+          if (wert && !werte.some(o => o.w === wert)) werte.unshift({ w: wert, t: wert });
+          html += '<select id="flt_' + f.key + '" data-filter="' + f.key + '">' +
+                  '<option value="">(alle)</option>' +
+                  werte.map(o => '<option value="' + esc(o.w) + '"' +
+                            (o.w === wert ? ' selected' : '') + '>' + esc(o.t) + '</option>').join('') +
+                  '</select>';
+        }
+        html += '</div>';
+      }
+      const aktiv = Object.values(state.f).filter(Boolean).length;
+      html += '<div class="fspacer"></div>';
+      if (aktiv)
+        html += '<button class="btn ghost" data-role="fclear">Filter zur\u00fccksetzen (' + aktiv + ')</button>';
+      // Hinweistext darf HTML enthalten - er stammt aus dem Aufrufer, nicht aus Daten.
+      const hinweis = opt.filterHint ? opt.filterHint(state.f, opt.rows) : "";
+      if (hinweis) html += '<div class="fhint">' + hinweis + '</div>';
+      html += '</div>';
+    }
+
+    html += '<div class="toolbar">';
     html += '<div class="search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">' +
             '<circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>' +
             '<input type="search" placeholder="' + esc(opt.searchPlaceholder || "Suchen …") +
@@ -565,6 +666,7 @@ function createTable(opt) {
     if (role === "prev") { state.page--; render(); return; }
     if (role === "next") { state.page++; render(); return; }
     if (role === "clear") { selected.clear(); notify(); render(); return; }
+    if (role === "fclear") { state.f = {}; state.page = 0; render(); return; }
     if (role === "edit") { opt.onEdit(Array.from(selected)); return; }
     if (role === "all") {
       // Erfasst alle Treffer des Filters – aber nur die bearbeitbaren.
@@ -583,6 +685,16 @@ function createTable(opt) {
     if (tr && opt.onRowClick) opt.onRowClick(tr.dataset.id);
   });
 
+  // 'change' blubbert bei Formularelementen - deshalb genuegt ein Zuhoerer auf
+  // der Wurzel, obwohl render() die Elemente jedes Mal neu erzeugt.
+  root.addEventListener("change", ev => {
+    const k = ev.target.dataset ? ev.target.dataset.filter : null;
+    if (!k) return;
+    state.f[k] = ev.target.value;
+    state.page = 0;
+    render();
+  });
+
   function notify() { if (opt.onSelectionChange) opt.onSelectionChange(Array.from(selected)); }
 
   render();
@@ -596,12 +708,6 @@ const projectColumns = [
   { key: "msdyn_subject", label: "Projekt", cls: "subject",
     sortValue: r => (r.msdyn_subject || "").toLowerCase(),
     render: r => esc(store.projectLabel.get(r.msdyn_projectid) || r.msdyn_subject || "") },
-  { key: "msdyn_scheduledstart", label: "Geplanter Start",
-    sortValue: r => r.msdyn_scheduledstart || "",
-    render: r => esc(fmtDate(r, "msdyn_scheduledstart")) },
-  { key: "msdyn_finish", label: "Ende",
-    sortValue: r => r.msdyn_finish || "",
-    render: r => esc(fmtDate(r, "msdyn_finish")) },
   { key: "msdyn_progress", label: "Fortschritt", cls: "num",
     sortValue: r => (r.msdyn_progress === null || r.msdyn_progress === undefined ? "" : r.msdyn_progress),
     render: r => esc(fmtProgress(r.msdyn_progress)) }
@@ -630,9 +736,11 @@ function taskColumns(withProject) {
     { key: "msdyn_scheduledend", label: "Enddatum",
       sortValue: r => r.msdyn_scheduledend || "",
       render: r => esc(fmtDate(r, "msdyn_scheduledend")) },
-    { key: "msdyn_priority", label: "Priorität", cls: "num",
+    { key: "msdyn_priority", label: "Priorität",
+      // Sortiert weiterhin nach der ZAHL, damit die Reihenfolge der Dringlichkeit
+      // folgt (Dringend → Niedrig) und nicht dem Alphabet.
       sortValue: r => (r.msdyn_priority === null || r.msdyn_priority === undefined ? "" : r.msdyn_priority),
-      render: r => (r.msdyn_priority === null || r.msdyn_priority === undefined ? "" : esc(r.msdyn_priority)) },
+      render: r => esc(fmtPrioritaet(r.msdyn_priority)) },
     { key: "msdyn_progress", label: "Fortschritt", cls: "num",
       sortValue: r => (r.msdyn_progress === null || r.msdyn_progress === undefined ? "" : r.msdyn_progress),
       render: r => esc(fmtProgress(r.msdyn_progress)) }
@@ -657,6 +765,7 @@ function openBulkEdit(ids, onDone) {
   const dlg = $("#editDlg");
   $("#edStart").value = "";
   $("#edEnd").value = "";
+  $("#edPrio").value = "";
   $("#editMsg").innerHTML = "";
   const projCount = new Set(pendingTasks.map(t => t._msdyn_project_value)).size;
   $("#editCount").textContent =
@@ -667,11 +776,12 @@ function openBulkEdit(ids, onDone) {
 }
 
 function validateEdit() {
-  const s = $("#edStart").value, e = $("#edEnd").value;
+  const s = $("#edStart").value, e = $("#edEnd").value, p = $("#edPrio").value;
   const msg = $("#editMsg");
   msg.innerHTML = "";
 
-  if (!s && !e) { $("#edSave").disabled = true; return; }
+  // Nichts ausgefüllt – es gibt nichts zu speichern.
+  if (!s && !e && !p) { $("#edSave").disabled = true; return; }
 
   if (s && e && e < s) {
     msg.innerHTML = '<div class="notice err" style="margin:14px 0 0">Das Enddatum liegt vor dem Startdatum.</div>';
@@ -698,7 +808,7 @@ function validateEdit() {
   $("#edSave").disabled = false;
 }
 
-function buildConfirm(startDate, endDate) {
+function buildConfirm(startDate, endDate, prio) {
   const byProj = new Map();
   for (const t of pendingTasks) {
     const k = t.__projectLabel || "(ohne Projekt)";
@@ -715,10 +825,17 @@ function buildConfirm(startDate, endDate) {
       " Aufgaben</strong> in <strong>" + sets + " Projekt" + (sets === 1 ? "" : "en") + "</strong> geändert:</p>" +
     (startDate ? "<p style='margin:0 0 4px'>Startdatum → <strong>" + esc(de(startDate)) + "</strong></p>" : "") +
     (endDate   ? "<p style='margin:0 0 4px'>Enddatum → <strong>"  + esc(de(endDate))   + "</strong></p>" : "") +
+    (prio      ? "<p style='margin:0 0 4px'>Priorität → <strong>" + esc(prioText(prio)) +
+                 "</strong> <span style='color:#6b7684'>(gespeichert als " + esc(prio) + ")</span></p>" : "") +
     (!startDate ? "<p style='margin:0 0 4px;color:#6b7684'>Startdatum bleibt unverändert.</p>" : "") +
     (!endDate   ? "<p style='margin:0 0 4px;color:#6b7684'>Enddatum bleibt unverändert.</p>" : "") +
-    '<div class="notice warn" style="margin:14px 0">Die Planungs-Engine rechnet den Zeitplan neu. Termine können auf Arbeitstage gerückt werden, <strong>abhängige Aufgaben und das Projektende können sich mit verschieben</strong>. Der Vorgang lässt sich nicht rückgängig machen.</div>' +
-    (sammel ? '<div class="notice warn" style="margin:14px 0"><strong>' + sammel +
+    (!prio      ? "<p style='margin:0 0 4px;color:#6b7684'>Priorität bleibt unverändert.</p>" : "") +
+    // Die Engine-Warnung nur zeigen, wenn wirklich Termine geschrieben werden.
+    // Eine reine Prioritätsänderung verschiebt keinen Termin.
+    ((startDate || endDate)
+      ? '<div class="notice warn" style="margin:14px 0">Die Planungs-Engine rechnet den Zeitplan neu. Termine können auf Arbeitstage gerückt werden, <strong>abhängige Aufgaben und das Projektende können sich mit verschieben</strong>. Der Vorgang lässt sich nicht rückgängig machen.</div>'
+      : '<div class="notice warn" style="margin:14px 0">Der Vorgang lässt sich nicht rückgängig machen.</div>') +
+    ((sammel && (startDate || endDate)) ? '<div class="notice warn" style="margin:14px 0"><strong>' + sammel +
       " der ausgewählten Aufgaben sind Sammelaufgaben.</strong> Deren Termine leiten sich aus den " +
       "Unteraufgaben ab – die Planung kann die Eingabe daher überschreiben.</div>" : "") +
     '<div class="notice info" style="margin:0 0 12px">Die aktuellen Werte werden vor dem Schreiben automatisch als CSV-Datei heruntergeladen.</div>' +
@@ -728,7 +845,8 @@ function buildConfirm(startDate, endDate) {
 }
 
 function downloadBackupCsv() {
-  const head = ["Aufgaben-ID", "Projekt", "Aufgabe", "Startdatum (vorher)", "Enddatum (vorher)"];
+  const head = ["Aufgaben-ID", "Projekt", "Aufgabe", "Startdatum (vorher)", "Enddatum (vorher)",
+                "Priorität (vorher)", "Prioritätsstufe (vorher)"];
   const lines = [head.join(";")];
   for (const t of pendingTasks) {
     lines.push([
@@ -736,7 +854,9 @@ function downloadBackupCsv() {
       '"' + String(t.__projectLabel || "").replace(/"/g, '""') + '"',
       '"' + String(t.msdyn_subject || "").replace(/"/g, '""') + '"',
       isoDay(t.msdyn_scheduledstart),
-      isoDay(t.msdyn_scheduledend)
+      isoDay(t.msdyn_scheduledend),
+      (t.msdyn_priority === null || t.msdyn_priority === undefined ? "" : t.msdyn_priority),
+      '"' + fmtPrioritaet(t.msdyn_priority) + '"'
     ].join(";"));
   }
   const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
@@ -791,7 +911,7 @@ async function pollOperationSet(id) {
   return { code: null, label: "Zeitüberschreitung" };
 }
 
-async function writeBulk(startDate, endDate) {
+async function writeBulk(startDate, endDate, prio) {
   const startIso = startDate ? startDate + "T" + CONFIG.startTimeUtc + "Z" : null;
   const endIso   = endDate   ? endDate   + "T" + CONFIG.endTimeUtc   + "Z" : null;
 
@@ -819,7 +939,7 @@ async function writeBulk(startDate, endDate) {
 
         const os = await dv("msdyn_CreateOperationSetV1", { method: "POST", body: {
           ProjectId: projectId,
-          Description: "Massenbearbeitung Termine – " + stamp
+          Description: "Massenbearbeitung – " + stamp
         }});
         osId = os.OperationSetId;
 
@@ -830,6 +950,9 @@ async function writeBulk(startDate, endDate) {
           };
           if (startIso) entity.msdyn_scheduledstart = startIso;
           if (endIso)   entity.msdyn_scheduledend   = endIso;
+          // msdyn_priority ist über PssUpdateV1 schreibbar und darf in derselben
+          // Operation stehen wie die Termine (geprüft am 18.08.2026).
+          if (prio)     entity.msdyn_priority       = Number(prio);
           await dv("msdyn_PssUpdateV1", { method: "POST", body: { Entity: entity, OperationSetId: osId } });
         });
 
@@ -849,7 +972,7 @@ async function writeBulk(startDate, endDate) {
       }
     }
   }
-  return { results, startDate, endDate };
+  return { results, startDate, endDate, prio: prio ? Number(prio) : null };
 }
 
 function reportResult(run, before) {
@@ -866,6 +989,11 @@ function reportResult(run, before) {
       deviations.push({ t: now, feld: "Start", soll: run.startDate, ist: isoDay(now.msdyn_scheduledstart) });
     if (run.endDate && isoDay(now.msdyn_scheduledend) !== run.endDate)
       deviations.push({ t: now, feld: "Ende", soll: run.endDate, ist: isoDay(now.msdyn_scheduledend) });
+    // Die Priorität rechnet die Engine nicht nach – eine Abweichung hier ist
+    // ein echter Fehlschlag, kein Verschieben auf Arbeitstage.
+    if (run.prio && Number(now.msdyn_priority) !== run.prio)
+      deviations.push({ t: now, feld: "Priorität", soll: prioText(run.prio),
+                        ist: fmtPrioritaet(now.msdyn_priority) });
   }
 
   let html = "";
@@ -955,8 +1083,6 @@ function viewProjectDetail(projectId, tab) {
     v.appendChild(el("div", { class: "panel" },
       '<div class="form">' +
       field("Projektname", store.projectLabel.get(projectId)) +
-      field("Geplanter Start", fmtDate(p, "msdyn_scheduledstart")) +
-      field("Ende", fmtDate(p, "msdyn_finish")) +
       field("Fortschritt", fmtProgress(p.msdyn_progress)) +
       "</div>"));
     return;
@@ -985,6 +1111,67 @@ function field(label, value) {
          '<input type="text" readonly value="' + esc(value) + '"></div>';
 }
 
+/*
+  Filter fuer das Menue 'Projektaufgaben'.
+
+  Die Auswahllisten entstehen aus den geladenen Daten, nicht aus einer festen
+  Liste - so tauchen neue Projekte und Buckets von selbst auf. Buckets werden
+  ueber ihren NAMEN gefiltert: es gibt 453 Bucket-Datensaetze, aber nur 123
+  verschiedene Namen, und 47 davon kommen in mehreren Projekten vor.
+*/
+function taskFilters() {
+  const liste = (rows, f) => [...new Set(rows.map(f).filter(Boolean))]
+    .sort((a, b) => String(a).localeCompare(String(b), "de"))
+    .map(x => ({ w: x, t: x }));
+
+  return [
+    { key: "manuell", label: "manuell", type: "select",
+      optionen: () => [{ w: "ja", t: "ja" }, { w: "nein", t: "nein" }],
+      test: (r, w) => (w === "ja") === (r.msdyn_ismanual === true) },
+
+    { key: "projekt", label: "Projekt", type: "select",
+      optionen: rows => liste(rows, r => r.__projectLabel),
+      test: (r, w) => (r.__projectLabel || "") === w },
+
+    { key: "bucket", label: "Bucket", type: "select",
+      optionen: rows => liste(rows, r => r["_msdyn_projectbucket_value" + FV]),
+      test: (r, w) => (r["_msdyn_projectbucket_value" + FV] || "") === w },
+
+    { key: "prio", label: "Priorit\u00e4t", type: "select",
+      // Gefiltert wird nach der STUFE, nicht nach der Zahl - passend zur Anzeige
+      // in der Spalte. Sortiert nach Dringlichkeit, nicht alphabetisch.
+      optionen: rows => {
+        const rang = t => { const st = PRIO_STUFEN.find(x => x.text === t); return st ? st.wert : 99; };
+        return [...new Set(rows.map(r => fmtPrioritaet(r.msdyn_priority)).filter(Boolean))]
+          .sort((a, b) => rang(a) - rang(b)).map(t => ({ w: t, t: t }));
+      },
+      test: (r, w) => fmtPrioritaet(r.msdyn_priority) === w },
+
+    // Zeitraum: die Aufgabe muss VOLLSTAENDIG im Fenster liegen (so entschieden).
+    // 'von' wirkt auf msdyn_start, 'bis' auf msdyn_finish.
+    { key: "von", label: "Start ab", type: "date",
+      test: (r, w) => { const d = isoDay(r.msdyn_start);  return !!d && d >= w; } },
+
+    { key: "bis", label: "Ende bis", type: "date",
+      test: (r, w) => { const d = isoDay(r.msdyn_finish); return !!d && d <= w; } }
+  ];
+}
+
+/*
+  Macht sichtbar, was der Zeitraumfilter still verschluckt: msdyn_start und
+  msdyn_finish sind bei manuell geplanten Aufgaben leer, solche Zeilen fallen
+  daher heraus, sobald ein Datum gesetzt ist.
+*/
+function taskFilterHint(f, rows) {
+  if (!f.von && !f.bis) return "";
+  const ohne = rows.filter(r => (f.von && !r.msdyn_start) || (f.bis && !r.msdyn_finish)).length;
+  if (!ohne) return "";
+  return "Der Zeitraum wirkt auf <strong>msdyn_start</strong> und <strong>msdyn_finish</strong>. " +
+    "<strong>" + ohne.toLocaleString("de-DE") + "</strong> Aufgaben haben dort keinen Wert und sind " +
+    "deshalb ausgeblendet \u2013 darunter alle manuell geplanten. Die Spalten " +
+    "<em>Startdatum</em>/<em>Enddatum</em> zeigen dagegen msdyn_scheduledstart/-end.";
+}
+
 function viewTasks() {
   const v = $("#view");
   v.innerHTML = "";
@@ -997,6 +1184,8 @@ function viewTasks() {
 
   const tbl = createTable({
     columns: taskColumns(true),
+    filters: taskFilters(),
+    filterHint: taskFilterHint,
     rows: store.tasks,
     getId: r => r.msdyn_projecttaskid,
     selectable: true,
@@ -1041,6 +1230,16 @@ document.addEventListener("click", async ev => {
 
 $("#edStart").addEventListener("input", validateEdit);
 $("#edEnd").addEventListener("input", validateEdit);
+$("#edPrio").addEventListener("change", validateEdit);
+
+// Auswahlfeld aus PRIO_STUFEN aufbauen, damit die Stufen nur an EINER Stelle
+// stehen und Anzeige und Dialog nicht auseinanderlaufen können.
+for (const st of PRIO_STUFEN) {
+  const o = el("option");
+  o.value = String(st.wert);
+  o.textContent = st.text;
+  $("#edPrio").appendChild(o);
+}
 $("#logout").addEventListener("click", () => pca.logoutRedirect());
 
 // Abbrechen schließt nur – es passiert nichts.
@@ -1067,16 +1266,17 @@ $("#edSave").addEventListener("click", async () => {
   if ($("#edSave").disabled) return;
   const startDate = $("#edStart").value || null;
   const endDate   = $("#edEnd").value || null;
+  const prio      = $("#edPrio").value || null;
   $("#editDlg").close();
 
-  buildConfirm(startDate, endDate);
+  buildConfirm(startDate, endDate, prio);
   if (!(await askConfirm())) return;
 
   const before = pendingTasks.map(t => ({ id: t.msdyn_projecttaskid }));
   downloadBackupCsv();
 
   try {
-    const run = await writeBulk(startDate, endDate);
+    const run = await writeBulk(startDate, endDate, prio);
     overlay(true, "Daten werden neu geladen …");
     await loadData();
     lastResultHtml = reportResult(run, before);
