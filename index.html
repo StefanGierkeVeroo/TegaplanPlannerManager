@@ -100,6 +100,38 @@ tbody tr.gesperrt:hover{background:transparent}
   border-radius:10px;background:var(--warn-soft);color:var(--warn);border:1px solid #fedf89;
   vertical-align:1px;white-space:nowrap}
 .chip-mild{background:#f1f3f6;color:var(--muted);border-color:var(--line-strong)}
+
+/* ------------------------------------------------------------------ Labels */
+.lb{display:inline-block;font-size:11px;font-weight:600;line-height:1.7;padding:0 9px;
+  border-radius:10px;white-space:nowrap;margin:1px 4px 1px 0}
+.lb-fix{background:#15803d;color:#fff}
+.lb-base{background:#facc15;color:#422006}
+.lb-plan{background:#1d4ed8;color:#fff}
+.lb-exclude{background:#7f1d1d;color:#fff}
+.lb-other{background:#e8ebef;color:#4b5563}
+td.labels{white-space:normal;max-width:230px}
+a.plink{color:var(--accent);text-decoration:none}
+a.plink:hover{text-decoration:underline}
+
+/* ------------------------------------------------------- Mehrfachauswahl */
+.dd{position:relative}
+.dd-btn{display:flex;align-items:center;gap:7px;min-width:168px;max-width:260px;
+  padding:6px 9px;border:1px solid var(--line-strong);border-radius:6px;background:#fff;
+  color:var(--text);font:inherit;text-align:left}
+.dd-btn:hover{border-color:var(--muted)}
+.dd-btn>span:first-child{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dd-menu{display:none;position:absolute;top:calc(100% + 6px);left:0;z-index:5;min-width:200px;
+  background:var(--panel);border:1px solid var(--line-strong);border-radius:8px;
+  box-shadow:0 8px 22px rgba(16,24,40,.15);padding:6px}
+.dd.open .dd-menu{display:block}
+.dd-item{display:flex;align-items:center;gap:9px;padding:6px 8px;border-radius:6px;cursor:pointer}
+.dd-item:hover{background:#f4f6f9}
+.dd-badge{display:inline-block;min-width:18px;padding:0 5px;border-radius:9px;background:var(--accent);
+  color:#fff;font-size:11px;font-weight:700;line-height:18px;text-align:center}
+.dd-caret{color:var(--muted);font-size:10px;margin-left:2px}
+.dd-clear{display:block;width:100%;margin-top:5px;padding:7px 8px;border:none;
+  border-top:1px solid var(--line);background:none;color:var(--accent);text-align:left;font-size:12.5px}
+.dd-clear:hover{background:#f4f6f9}
 .hinweis{padding:9px 14px;border-bottom:1px solid var(--line);background:#fbfcfd;
   color:var(--muted);font-size:12.5px}
 
@@ -247,6 +279,11 @@ const CONFIG = {
   // Entspricht dem Muster, das in allen vorhandenen Aufgaben steht.
   startTimeUtc: "09:00:00",
   endTimeUtc:   "17:00:00",
+
+  // Verweisziel der Spalte "Projekt" in der Aufgabenliste. Die Organisations-
+  // Kennung ist fest, die Projekt-GUID stammt aus msdyn_project.
+  plannerBaseUrl: "https://planner.cloud.microsoft/webui/premiumplan",
+  plannerOrgId:   "9c0ead57-1236-f011-9a43-000d3a479643",
 
   pageSize:      100,   // Zeilen je Tabellenseite
   maxOpsPerSet:  200,   // Dataverse-Limit: 200 Operationen je OperationSet
@@ -449,7 +486,19 @@ const TASK_SELECT = "msdyn_projecttaskid,msdyn_subject,_msdyn_projectbucket_valu
 // Scheduling-Engine schreibgeschuetzt (E_NOTEDITABLE). Nachgewiesen am 12.08.2026.
 const istBearbeitbar = t => t.msdyn_ismanual !== true;
 
-const store = { projects: [], tasks: [], byProject: new Map(), projectLabel: new Map() };
+// Farbschema laut Vorgabe. Alle uebrigen Labels erscheinen neutral grau,
+// damit nichts verborgen bleibt.
+const LABEL_KLASSEN = { fix: "lb-fix", base: "lb-base", plan: "lb-plan", exclude: "lb-exclude" };
+const LABEL_FILTER  = ["Fix", "Base", "Plan", "Exclude"];
+const plannerUrl = projektId =>
+  CONFIG.plannerBaseUrl + "/" + encodeURIComponent(projektId) + "/org/" + CONFIG.plannerOrgId;
+
+const labelChip = text =>
+  '<span class="lb ' + (LABEL_KLASSEN[String(text).trim().toLowerCase()] || "lb-other") +
+  '">' + esc(text) + "</span>";
+
+const store = { projects: [], tasks: [], byProject: new Map(), projectLabel: new Map(),
+                labelsByTask: new Map() };
 
 async function loadData() {
   overlay(true, "Projekte werden geladen …");
@@ -474,10 +523,27 @@ async function loadData() {
       p.msdyn_subject + (dup && d ? " (ab " + d + ")" : ""));
   }
 
+  // Labels: Verknuepfungstabelle msdyn_projecttasktolabel, Text aus msdyn_projectlabel.
+  overlay(true, "Labels werden geladen …");
+  const links = await dvAll("msdyn_projecttasktolabels?$select=_msdyn_projecttaskid_value" +
+                            "&$expand=msdyn_ProjectLabelId($select=msdyn_projectlabeltext)");
+  store.labelsByTask.clear();
+  for (const l of links) {
+    const txt = ((l.msdyn_ProjectLabelId || {}).msdyn_projectlabeltext || "").trim();
+    const tid = l._msdyn_projecttaskid_value;
+    if (!txt || !tid) continue;                       // unbenannte Label-Plaetze ueberspringen
+    if (!store.labelsByTask.has(tid)) store.labelsByTask.set(tid, []);
+    const arr = store.labelsByTask.get(tid);
+    if (!arr.includes(txt)) arr.push(txt);
+  }
+
   store.byProject.clear();
   for (const t of store.tasks) {
     const pid = t._msdyn_project_value;
     t.__projectLabel = store.projectLabel.get(pid) || (t["_msdyn_project_value" + FV] || "");
+    t.__labels      = store.labelsByTask.get(t.msdyn_projecttaskid) || [];
+    t.__labelsLower = t.__labels.map(x => x.toLowerCase());
+    t.__labelText   = t.__labels.join(" ");
     if (!store.byProject.has(pid)) store.byProject.set(pid, []);
     store.byProject.get(pid).push(t);
   }
@@ -491,7 +557,8 @@ function createTable(opt) {
   // opt: { columns, rows, getId, selectable, onRowClick, searchFields, emptyText,
   //        onSelectionChange, filters, filterHint }
   // filters: [{ key, label, type:'select'|'date', optionen(rows), test(row, wert) }]
-  const state = { q: "", sort: opt.defaultSort || null, dir: opt.defaultDir || "asc", page: 0, f: {} };
+  const state = { q: "", sort: opt.defaultSort || null, dir: opt.defaultDir || "asc", page: 0, f: {},
+                  mOpen: null };   // Schluessel des geoeffneten Mehrfachauswahl-Menues
   const selected = new Set();
   const root = el("div", { class: "panel" });
 
@@ -501,11 +568,15 @@ function createTable(opt) {
     UEBRIGEN Filter passieren. Dadurch zeigt z. B. die Bucket-Liste nur noch die
     Buckets des gewaehlten Projekts.
   */
+  // Ein leeres Array ist in JavaScript "wahr" - fuer die Mehrfachauswahl waere
+  // das falsch, deshalb diese Pruefung an allen Stellen.
+  const gesetzt = w => Array.isArray(w) ? w.length > 0 : !!w;
+
   function mitFiltern(rows, ausser) {
     for (const f of (opt.filters || [])) {
       if (f.key === ausser) continue;
       const w = state.f[f.key];
-      if (w) rows = rows.filter(r => f.test(r, w));
+      if (gesetzt(w)) rows = rows.filter(r => f.test(r, w));
     }
     return rows;
   }
@@ -555,6 +626,24 @@ function createTable(opt) {
         if (f.type === "date") {
           html += '<input type="date" id="flt_' + f.key + '" data-filter="' + f.key +
                   '" value="' + esc(wert) + '">';
+        } else if (f.type === "multi") {
+          // Mehrfachauswahl als Klappmenue mit Kaestchen. Mehrere Haken wirken
+          // als ODER - eine Zeile passt, sobald EINER der Werte zutrifft.
+          const gew = Array.isArray(state.f[f.key]) ? state.f[f.key] : [];
+          const offen = state.mOpen === f.key;
+          html += '<div class="dd' + (offen ? " open" : "") + '">' +
+            '<button type="button" class="dd-btn" data-role="mtoggle" data-key="' + f.key + '">' +
+              '<span>' + (gew.length ? esc(gew.join(", ")) : "(alle)") + '</span>' +
+              (gew.length ? '<span class="dd-badge">' + gew.length + '</span>' : '') +
+              '<span class="dd-caret">▾</span></button>' +
+            '<div class="dd-menu">' +
+              f.optionen(opt.rows).map(o =>
+                '<label class="dd-item"><input type="checkbox" data-multi="' + f.key +
+                '" value="' + esc(o.w) + '"' + (gew.includes(o.w) ? " checked" : "") + '>' +
+                (f.optionRender ? f.optionRender(o) : esc(o.t)) + '</label>').join("") +
+              (gew.length ? '<button type="button" class="dd-clear" data-role="mclear" data-key="' +
+                            f.key + '">Auswahl aufheben</button>' : "") +
+            '</div></div>';
         } else {
           const werte = f.optionen(mitFiltern(opt.rows, f.key));
           // Der gewaehlte Wert bleibt immer waehlbar, auch wenn ihn ein anderer
@@ -568,7 +657,7 @@ function createTable(opt) {
         }
         html += '</div>';
       }
-      const aktiv = Object.values(state.f).filter(Boolean).length;
+      const aktiv = Object.values(state.f).filter(gesetzt).length;
       html += '<div class="fspacer"></div>';
       if (aktiv)
         html += '<button class="btn ghost" data-role="fclear">Filter zur\u00fccksetzen (' + aktiv + ')</button>';
@@ -666,7 +755,15 @@ function createTable(opt) {
     if (role === "prev") { state.page--; render(); return; }
     if (role === "next") { state.page++; render(); return; }
     if (role === "clear") { selected.clear(); notify(); render(); return; }
-    if (role === "fclear") { state.f = {}; state.page = 0; render(); return; }
+    if (role === "fclear") { state.f = {}; state.mOpen = null; state.page = 0; render(); return; }
+    if (role === "mtoggle") {
+      const k = ev.target.closest("[data-key]").dataset.key;
+      state.mOpen = state.mOpen === k ? null : k; render(); return;
+    }
+    if (role === "mclear") {
+      const k = ev.target.dataset.key;
+      state.f[k] = []; state.page = 0; render(); return;
+    }
     if (role === "edit") { opt.onEdit(Array.from(selected)); return; }
     if (role === "all") {
       // Erfasst alle Treffer des Filters – aber nur die bearbeitbaren.
@@ -688,11 +785,30 @@ function createTable(opt) {
   // 'change' blubbert bei Formularelementen - deshalb genuegt ein Zuhoerer auf
   // der Wurzel, obwohl render() die Elemente jedes Mal neu erzeugt.
   root.addEventListener("change", ev => {
+    const mk = ev.target.dataset ? ev.target.dataset.multi : null;
+    if (mk) {
+      const cur = Array.isArray(state.f[mk]) ? state.f[mk].slice() : [];
+      const v = ev.target.value;
+      const i = cur.indexOf(v);
+      if (ev.target.checked) { if (i < 0) cur.push(v); } else if (i >= 0) cur.splice(i, 1);
+      state.f[mk] = cur;
+      state.page = 0;
+      render();                       // state.mOpen bleibt gesetzt: Menue bleibt offen
+      return;
+    }
     const k = ev.target.dataset ? ev.target.dataset.filter : null;
     if (!k) return;
     state.f[k] = ev.target.value;
     state.page = 0;
     render();
+  });
+
+  // Klick irgendwo ausserhalb schliesst ein offenes Klappmenue. Laeuft nach dem
+  // Zuhoerer auf der Wurzel, zerstoert also kein Element mitten im Klick.
+  document.addEventListener("click", ev => {
+    if (!state.mOpen || !root.isConnected) return;
+    if (ev.target.closest && ev.target.closest(".dd")) return;
+    state.mOpen = null; render();
   });
 
   function notify() { if (opt.onSelectionChange) opt.onSelectionChange(Array.from(selected)); }
@@ -713,7 +829,7 @@ const projectColumns = [
     render: r => esc(fmtProgress(r.msdyn_progress)) }
 ];
 
-function taskColumns(withProject) {
+function taskColumns(withProject, withLabels) {
   const cols = [
     { key: "msdyn_subject", label: "Aufgabe", cls: "subject",
       sortValue: r => (r.msdyn_subject || "").toLowerCase(),
@@ -725,7 +841,16 @@ function taskColumns(withProject) {
   ];
   if (withProject) cols.push({ key: "__project", label: "Projekt",
     sortValue: r => (r.__projectLabel || "").toLowerCase(),
-    render: r => esc(r.__projectLabel || "") });
+    render: r => {
+      const name = esc(r.__projectLabel || "");
+      const id = r._msdyn_project_value;
+      if (!id || !name) return name;
+      // In neuem Tab: Project for the Web ist eine eigene Anwendung, und die
+      // geladenen Daten samt Auswahl sollen nicht verloren gehen.
+      return '<a class="plink" href="' + esc(plannerUrl(id)) + '"' +
+             ' target="_blank" rel="noopener noreferrer"' +
+             ' title="In Project for the Web öffnen">' + name + "</a>";
+    } });
   cols.push(
     { key: "bucket", label: "Bucket",
       sortValue: r => (r["_msdyn_projectbucket_value" + FV] || "").toLowerCase(),
@@ -745,6 +870,9 @@ function taskColumns(withProject) {
       sortValue: r => (r.msdyn_progress === null || r.msdyn_progress === undefined ? "" : r.msdyn_progress),
       render: r => esc(fmtProgress(r.msdyn_progress)) }
   );
+  if (withLabels) cols.push({ key: "labels", label: "Labels", cls: "labels",
+    sortValue: r => (r.__labels || []).join(", ").toLowerCase(),
+    render: r => (r.__labels || []).map(labelChip).join("") });
   return cols;
 }
 
@@ -1137,6 +1265,13 @@ function taskFilters() {
       optionen: rows => liste(rows, r => r["_msdyn_projectbucket_value" + FV]),
       test: (r, w) => (r["_msdyn_projectbucket_value" + FV] || "") === w },
 
+    // Mehrfachauswahl mit ODER: eine Aufgabe passt, sobald sie EINES der
+    // angehakten Labels traegt.
+    { key: "labels", label: "Labels", type: "multi",
+      optionen: () => LABEL_FILTER.map(l => ({ w: l, t: l })),
+      optionRender: o => labelChip(o.t),
+      test: (r, w) => w.some(v => (r.__labelsLower || []).includes(v.toLowerCase())) },
+
     { key: "prio", label: "Priorit\u00e4t", type: "select",
       // Gefiltert wird nach der STUFE, nicht nach der Zahl - passend zur Anzeige
       // in der Spalte. Sortiert nach Dringlichkeit, nicht alphabetisch.
@@ -1183,15 +1318,16 @@ function viewTasks() {
   if (lastResultHtml) { v.appendChild(el("div", {}, lastResultHtml)); lastResultHtml = ""; }
 
   const tbl = createTable({
-    columns: taskColumns(true),
+    columns: taskColumns(true, true),
     filters: taskFilters(),
     filterHint: taskFilterHint,
     rows: store.tasks,
     getId: r => r.msdyn_projecttaskid,
     selectable: true,
     canSelect: istBearbeitbar,
-    searchFields: ["msdyn_subject", "__projectLabel", r => r["_msdyn_projectbucket_value" + FV]],
-    searchPlaceholder: "Aufgabe, Projekt oder Bucket suchen …",
+    searchFields: ["msdyn_subject", "__projectLabel", "__labelText",
+                   r => r["_msdyn_projectbucket_value" + FV]],
+    searchPlaceholder: "Aufgabe, Projekt, Bucket oder Label suchen …",
     defaultSort: "msdyn_subject",
     onEdit: ids => openBulkEdit(ids, () => { tbl.clearSelection(); route(); })
   });
