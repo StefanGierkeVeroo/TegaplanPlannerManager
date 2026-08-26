@@ -230,12 +230,14 @@ dialog::backdrop{background:rgba(16,24,40,.45)}
       <p id="editCount"></p>
     </div>
     <div class="dlg-body">
-      <div class="notice info">Es werden ausschließlich <strong>Startdatum</strong>, <strong>Enddatum</strong> und <strong>Priorität</strong> geändert. Ein leer gelassenes Feld bleibt in allen Datensätzen unverändert.</div>
+      <div class="notice info">Es werden ausschließlich <strong>Startdatum</strong>, <strong>Enddatum</strong>, <strong>Priorität</strong> und <strong>Label</strong> geändert. Ein leer gelassenes Feld bleibt in allen Datensätzen unverändert.</div>
       <div class="dlg-grid">
         <div class="field"><label for="edStart">Startdatum</label><input type="date" id="edStart"></div>
         <div class="field"><label for="edEnd">Enddatum</label><input type="date" id="edEnd"></div>
         <div class="field span2"><label for="edPrio">Priorität</label>
           <select id="edPrio"><option value="">(unverändert)</option></select></div>
+        <div class="field span2"><label for="edLabel">Label</label>
+          <select id="edLabel"><option value="">(unverändert)</option></select></div>
       </div>
       <div id="editMsg"></div>
     </div>
@@ -498,7 +500,13 @@ const labelChip = text =>
   '">' + esc(text) + "</span>";
 
 const store = { projects: [], tasks: [], byProject: new Map(), projectLabel: new Map(),
-                labelsByTask: new Map() };
+                labelsByTask: new Map(),
+                // Verknuepfungs-Datensaetze je Aufgabe: { id, text }. Die Id wird
+                // zum Loeschen gebraucht, der Text zum Vergleich.
+                linksByTask: new Map(),
+                // Label-Definitionen je Projekt: Map(projektId -> Map(textKlein -> labelId)).
+                // Labels gehoeren in Project for the Web immer zu genau einem Projekt.
+                labelDefs: new Map() };
 
 async function loadData() {
   overlay(true, "Projekte werden geladen …");
@@ -525,9 +533,11 @@ async function loadData() {
 
   // Labels: Verknuepfungstabelle msdyn_projecttasktolabel, Text aus msdyn_projectlabel.
   overlay(true, "Labels werden geladen …");
-  const links = await dvAll("msdyn_projecttasktolabels?$select=_msdyn_projecttaskid_value" +
+  const links = await dvAll("msdyn_projecttasktolabels?$select=msdyn_projecttasktolabelid," +
+                            "_msdyn_projecttaskid_value" +
                             "&$expand=msdyn_ProjectLabelId($select=msdyn_projectlabeltext)");
   store.labelsByTask.clear();
+  store.linksByTask.clear();
   for (const l of links) {
     const txt = ((l.msdyn_ProjectLabelId || {}).msdyn_projectlabeltext || "").trim();
     const tid = l._msdyn_projecttaskid_value;
@@ -535,6 +545,22 @@ async function loadData() {
     if (!store.labelsByTask.has(tid)) store.labelsByTask.set(tid, []);
     const arr = store.labelsByTask.get(tid);
     if (!arr.includes(txt)) arr.push(txt);
+    if (!store.linksByTask.has(tid)) store.linksByTask.set(tid, []);
+    store.linksByTask.get(tid).push({ id: l.msdyn_projecttasktolabelid, text: txt });
+  }
+
+  // Label-Definitionen je Projekt - noetig, um beim Setzen den richtigen
+  // Datensatz zu treffen. "Fix" in Projekt A ist ein anderer Datensatz als in B.
+  const defs = await dvAll("msdyn_projectlabels?$select=msdyn_projectlabelid," +
+                           "msdyn_projectlabeltext,_msdyn_projectid_value");
+  store.labelDefs.clear();
+  for (const d of defs) {
+    const txt = (d.msdyn_projectlabeltext || "").trim();
+    const pid = d._msdyn_projectid_value;
+    if (!txt || !pid) continue;
+    if (!store.labelDefs.has(pid)) store.labelDefs.set(pid, new Map());
+    const m = store.labelDefs.get(pid);
+    if (!m.has(txt.toLowerCase())) m.set(txt.toLowerCase(), d.msdyn_projectlabelid);
   }
 
   store.byProject.clear();
@@ -894,6 +920,11 @@ function openBulkEdit(ids, onDone) {
   $("#edStart").value = "";
   $("#edEnd").value = "";
   $("#edPrio").value = "";
+  // Auswahlliste aus dem Farbschema aufbauen; Chips waeren in einem <option>
+  // nicht darstellbar, deshalb nur der Text.
+  $("#edLabel").innerHTML = '<option value="">(unverändert)</option>' +
+    LABEL_FILTER.map(l => '<option value="' + esc(l) + '">' + esc(l) + "</option>").join("");
+  $("#edLabel").value = "";
   $("#editMsg").innerHTML = "";
   const projCount = new Set(pendingTasks.map(t => t._msdyn_project_value)).size;
   $("#editCount").textContent =
@@ -905,11 +936,32 @@ function openBulkEdit(ids, onDone) {
 
 function validateEdit() {
   const s = $("#edStart").value, e = $("#edEnd").value, p = $("#edPrio").value;
+  const lab = $("#edLabel").value;
   const msg = $("#editMsg");
   msg.innerHTML = "";
 
   // Nichts ausgefüllt – es gibt nichts zu speichern.
-  if (!s && !e && !p) { $("#edSave").disabled = true; return; }
+  if (!s && !e && !p && !lab) { $("#edSave").disabled = true; return; }
+
+  // Hinweis (kein Fehler): In manchen Projekten gibt es das Label nicht.
+  let labelHinweis = "";
+  if (lab) {
+    const { plan, ohneLabel } = planeLabel(lab);
+    const verlieren = pendingTasks.filter(t => {
+      const lp = plan.get(t.msdyn_projecttaskid);
+      return lp && lp.loeschen.length > 0;
+    }).length;
+    if (ohneLabel.length) {
+      labelHinweis += '<div class="notice warn" style="margin:14px 0 0"><strong>' +
+        ohneLabel.length + " Aufgaben bekommen kein Label:</strong> " + projektSatz(ohneLabel) +
+        " gibt es kein Label „" + esc(lab) + "“. Deren vorhandene Labels bleiben unangetastet.</div>";
+    }
+    if (verlieren) {
+      labelHinweis += '<div class="notice warn" style="margin:14px 0 0"><strong>Bei ' + verlieren +
+        " Aufgaben werden bestehende Labels entfernt.</strong> Nach dem Speichern trägt jede " +
+        "ausgewählte Aufgabe nur noch „" + esc(lab) + "“.</div>";
+    }
+  }
 
   if (s && e && e < s) {
     msg.innerHTML = '<div class="notice err" style="margin:14px 0 0">Das Enddatum liegt vor dem Startdatum.</div>';
@@ -933,10 +985,11 @@ function validateEdit() {
       "</ul>Bitte beide Felder füllen oder die Auswahl anpassen.</div>";
     $("#edSave").disabled = true; return;
   }
+  msg.innerHTML = labelHinweis;
   $("#edSave").disabled = false;
 }
 
-function buildConfirm(startDate, endDate, prio) {
+function buildConfirm(startDate, endDate, prio, labelText) {
   const byProj = new Map();
   for (const t of pendingTasks) {
     const k = t.__projectLabel || "(ohne Projekt)";
@@ -947,6 +1000,9 @@ function buildConfirm(startDate, endDate, prio) {
   const sets = Array.from(byProj.keys()).length;
   const blocks = Array.from(byProj.values()).reduce((a, c) => a + Math.ceil(c / CONFIG.maxOpsPerSet), 0);
   const sammel = pendingTasks.filter(t => t.msdyn_summary === true).length;
+  const lp = planeLabel(labelText);
+  const verlieren = labelText ? pendingTasks.filter(t => {
+    const x = lp.plan.get(t.msdyn_projecttaskid); return x && x.loeschen.length > 0; }).length : 0;
 
   $("#confirmBody").innerHTML =
     "<p style='margin:0 0 12px'>Es werden <strong>" + pendingTasks.length.toLocaleString("de-DE") +
@@ -957,7 +1013,17 @@ function buildConfirm(startDate, endDate, prio) {
                  "</strong> <span style='color:#6b7684'>(gespeichert als " + esc(prio) + ")</span></p>" : "") +
     (!startDate ? "<p style='margin:0 0 4px;color:#6b7684'>Startdatum bleibt unverändert.</p>" : "") +
     (!endDate   ? "<p style='margin:0 0 4px;color:#6b7684'>Enddatum bleibt unverändert.</p>" : "") +
+    (labelText  ? "<p style='margin:0 0 4px'>Label → <strong>" + esc(labelText) + "</strong></p>" : "") +
     (!prio      ? "<p style='margin:0 0 4px;color:#6b7684'>Priorität bleibt unverändert.</p>" : "") +
+    (!labelText ? "<p style='margin:0 0 4px;color:#6b7684'>Label bleibt unverändert.</p>" : "") +
+    (labelText && lp.ohneLabel.length
+      ? '<div class="notice warn" style="margin:14px 0"><strong>' + lp.ohneLabel.length +
+        " Aufgaben bekommen kein Label.</strong> " + projektSatz(lp.ohneLabel) +
+        " gibt es „" + esc(labelText) + "“ nicht. Ihre vorhandenen Labels bleiben unangetastet.</div>" : "") +
+    (verlieren
+      ? '<div class="notice warn" style="margin:14px 0"><strong>Bei ' + verlieren +
+        " Aufgaben werden bestehende Labels entfernt</strong> und durch „" + esc(labelText) +
+        "“ ersetzt. Auch Labels außerhalb des Farbschemas sind davon betroffen.</div>" : "") +
     // Die Engine-Warnung nur zeigen, wenn wirklich Termine geschrieben werden.
     // Eine reine Prioritätsänderung verschiebt keinen Termin.
     ((startDate || endDate)
@@ -974,7 +1040,7 @@ function buildConfirm(startDate, endDate, prio) {
 
 function downloadBackupCsv() {
   const head = ["Aufgaben-ID", "Projekt", "Aufgabe", "Startdatum (vorher)", "Enddatum (vorher)",
-                "Priorität (vorher)", "Prioritätsstufe (vorher)"];
+                "Priorität (vorher)", "Prioritätsstufe (vorher)", "Labels (vorher)"];
   const lines = [head.join(";")];
   for (const t of pendingTasks) {
     lines.push([
@@ -984,7 +1050,8 @@ function downloadBackupCsv() {
       isoDay(t.msdyn_scheduledstart),
       isoDay(t.msdyn_scheduledend),
       (t.msdyn_priority === null || t.msdyn_priority === undefined ? "" : t.msdyn_priority),
-      '"' + fmtPrioritaet(t.msdyn_priority) + '"'
+      '"' + fmtPrioritaet(t.msdyn_priority) + '"',
+      '"' + (t.__labels || []).join("; ").replace(/"/g, '""') + '"'
     ].join(";"));
   }
   const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
@@ -1039,31 +1106,104 @@ async function pollOperationSet(id) {
   return { code: null, label: "Zeitüberschreitung" };
 }
 
-async function writeBulk(startDate, endDate, prio) {
+// Dataverse akzeptiert eine selbst vergebene Id - so ist der angelegte
+// Datensatz sofort bekannt (nachgewiesen am 27.08.2026).
+const neueGuid = () => (self.crypto && self.crypto.randomUUID)
+  ? self.crypto.randomUUID()
+  : "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, c => {
+      const r = Math.random() * 16 | 0;
+      return (c === "x" ? r : (r & 0x3 | 0x8)).toString(16);
+    });
+
+/*
+  Ermittelt je Aufgabe, was fuer das gewaehlte Label zu tun ist.
+
+  Ersetzen-Logik wie bestellt: Am Ende traegt die Aufgabe genau dieses eine
+  Label. Traegt sie es bereits, bleibt der vorhandene Datensatz stehen - das
+  spart Operationen und vermeidet unnoetiges Loeschen und Neuanlegen.
+
+  Aufgaben, deren Projekt das Label gar nicht kennt, landen in ohneLabel.
+  Deren vorhandene Labels werden NICHT geloescht - sonst stuende die Aufgabe
+  am Ende ohne jedes Label da, ohne das gewuenschte bekommen zu haben.
+*/
+// Formuliert die Projektliste sprachlich sauber - Einzahl liest sich sonst schief.
+function projektSatz(tasks) {
+  const p = [...new Set(tasks.map(t => t.__projectLabel).filter(Boolean))];
+  if (p.length === 1) return "Im Projekt „" + esc(p[0]) + "“";
+  const sichtbar = p.slice(0, 3).map(esc).join(", ");
+  return "In " + p.length + " Projekten (" + sichtbar + (p.length > 3 ? " …" : "") + ")";
+}
+
+function planeLabel(labelText) {
+  const plan = new Map();
+  const ohneLabel = [];
+  if (!labelText) return { plan, ohneLabel };
+  const ziel = labelText.toLowerCase();
+
+  for (const t of pendingTasks) {
+    const defs = store.labelDefs.get(t._msdyn_project_value);
+    const labelId = defs ? defs.get(ziel) : null;
+    if (!labelId) { ohneLabel.push(t); continue; }
+
+    const vorhanden = store.linksByTask.get(t.msdyn_projecttaskid) || [];
+    const behalten  = vorhanden.find(l => l.text.toLowerCase() === ziel) || null;
+    const loeschen  = vorhanden.filter(l => l !== behalten).map(l => l.id);
+    plan.set(t.msdyn_projecttaskid, { loeschen, anlegen: behalten ? null : labelId });
+  }
+  return { plan, ohneLabel };
+}
+
+async function writeBulk(startDate, endDate, prio, labelText) {
   const startIso = startDate ? startDate + "T" + CONFIG.startTimeUtc + "Z" : null;
   const endIso   = endDate   ? endDate   + "T" + CONFIG.endTimeUtc   + "Z" : null;
 
+  const { plan, ohneLabel } = planeLabel(labelText);
+  const feldAenderung = !!(startIso || endIso || prio);
+
+  // Je Aufgabe zaehlen, wie viele Operationen noetig sind. Eine Aufgabe ohne
+  // jede Aenderung wird gar nicht erst uebergeben.
+  const aufgaben = [];
+  for (const t of pendingTasks) {
+    const lp = plan.get(t.msdyn_projecttaskid) || null;
+    const ops = (feldAenderung ? 1 : 0) + (lp ? lp.loeschen.length + (lp.anlegen ? 1 : 0) : 0);
+    if (ops > 0) aufgaben.push({ t, lp, ops });
+  }
+
   // Nach Projekt gruppieren – ein OperationSet gehört zu genau einem Projekt.
   const groups = new Map();
-  for (const t of pendingTasks) {
-    const p = t._msdyn_project_value;
+  for (const a of aufgaben) {
+    const p = a.t._msdyn_project_value;
     if (!groups.has(p)) groups.set(p, []);
-    groups.get(p).push(t);
+    groups.get(p).push(a);
   }
 
   const results = [];
   let doneOps = 0;
-  const totalOps = pendingTasks.length;
+  const totalOps = aufgaben.reduce((s, a) => s + a.ops, 0);
   const stamp = new Date().toLocaleString("de-DE");
 
   for (const [projectId, list] of groups) {
     const label = store.projectLabel.get(projectId) || projectId;
-    for (let i = 0; i < list.length; i += CONFIG.maxOpsPerSet) {
-      const chunk = list.slice(i, i + CONFIG.maxOpsPerSet);
+
+    // Bloecke nach OPERATIONEN bilden, nicht nach Aufgaben: Ein Label-Wechsel
+    // kostet je Aufgabe mehrere Operationen. Die Operationen einer Aufgabe
+    // bleiben immer im selben Block - sonst koennte ein Fehlschlag eine Aufgabe
+    // ohne Label zuruecklassen.
+    const bloecke = [];
+    let cur = [], curOps = 0;
+    for (const a of list) {
+      if (cur.length && curOps + a.ops > CONFIG.maxOpsPerSet) { bloecke.push(cur); cur = []; curOps = 0; }
+      cur.push(a); curOps += a.ops;
+    }
+    if (cur.length) bloecke.push(cur);
+
+    for (const chunk of bloecke) {
+      const chunkTasks = chunk.map(a => a.t);
+      const chunkOps = chunk.reduce((s, a) => s + a.ops, 0);
       let osId = null;
       try {
         overlay(true, "Übergabe an die Planung – " + label + " (" +
-                doneOps.toLocaleString("de-DE") + " von " + totalOps.toLocaleString("de-DE") + ")");
+                doneOps.toLocaleString("de-DE") + " von " + totalOps.toLocaleString("de-DE") + " Operationen)");
 
         const os = await dv("msdyn_CreateOperationSetV1", { method: "POST", body: {
           ProjectId: projectId,
@@ -1071,36 +1211,56 @@ async function writeBulk(startDate, endDate, prio) {
         }});
         osId = os.OperationSetId;
 
-        await mapLimit(chunk, CONFIG.writeParallel, async t => {
-          const entity = {
-            "@odata.type": "Microsoft.Dynamics.CRM.msdyn_projecttask",
-            msdyn_projecttaskid: t.msdyn_projecttaskid
-          };
-          if (startIso) entity.msdyn_scheduledstart = startIso;
-          if (endIso)   entity.msdyn_scheduledend   = endIso;
-          // msdyn_priority ist über PssUpdateV1 schreibbar und darf in derselben
-          // Operation stehen wie die Termine (geprüft am 18.08.2026).
-          if (prio)     entity.msdyn_priority       = Number(prio);
-          await dv("msdyn_PssUpdateV1", { method: "POST", body: { Entity: entity, OperationSetId: osId } });
+        await mapLimit(chunk, CONFIG.writeParallel, async a => {
+          if (feldAenderung) {
+            const entity = {
+              "@odata.type": "Microsoft.Dynamics.CRM.msdyn_projecttask",
+              msdyn_projecttaskid: a.t.msdyn_projecttaskid
+            };
+            if (startIso) entity.msdyn_scheduledstart = startIso;
+            if (endIso)   entity.msdyn_scheduledend   = endIso;
+            // msdyn_priority ist über PssUpdateV1 schreibbar und darf in derselben
+            // Operation stehen wie die Termine (geprüft am 18.08.2026).
+            if (prio)     entity.msdyn_priority       = Number(prio);
+            await dv("msdyn_PssUpdateV1", { method: "POST", body: { Entity: entity, OperationSetId: osId } });
+          }
+          if (!a.lp) return;
+          // Erst die bisherigen Verknüpfungen entfernen, dann die neue anlegen.
+          for (const linkId of a.lp.loeschen) {
+            await dv("msdyn_PssDeleteV1", { method: "POST", body: {
+              RecordId: linkId,
+              EntityLogicalName: "msdyn_projecttasktolabel",
+              OperationSetId: osId } });
+          }
+          if (a.lp.anlegen) {
+            await dv("msdyn_PssCreateV1", { method: "POST", body: {
+              Entity: {
+                "@odata.type": "Microsoft.Dynamics.CRM.msdyn_projecttasktolabel",
+                msdyn_projecttasktolabelid: neueGuid(),
+                "msdyn_ProjectTaskId@odata.bind":  "/msdyn_projecttasks(" + a.t.msdyn_projecttaskid + ")",
+                "msdyn_ProjectLabelId@odata.bind": "/msdyn_projectlabels(" + a.lp.anlegen + ")"
+              },
+              OperationSetId: osId } });
+          }
         });
 
         await dv("msdyn_ExecuteOperationSetV1", { method: "POST", body: { OperationSetId: osId } });
 
         overlay(true, "Die Planung verarbeitet die Änderung – " + label + " …");
         const st = await pollOperationSet(osId);
-        doneOps += chunk.length;
-        results.push({ project: label, count: chunk.length, status: st });
+        doneOps += chunkOps;
+        results.push({ project: label, count: chunkTasks.length, status: st });
       } catch (err) {
         if (osId) {
           try { await dv("msdyn_AbandonOperationSetV1", { method: "POST", body: { OperationSetId: osId } }); }
           catch (_) {}
         }
-        results.push({ project: label, count: chunk.length,
-                       error: erklaereFehler(err.message, chunk) });
+        results.push({ project: label, count: chunkTasks.length,
+                       error: erklaereFehler(err.message, chunkTasks) });
       }
     }
   }
-  return { results, startDate, endDate, prio: prio ? Number(prio) : null };
+  return { results, startDate, endDate, prio: prio ? Number(prio) : null, labelText, ohneLabel };
 }
 
 function reportResult(run, before) {
@@ -1146,6 +1306,12 @@ function reportResult(run, before) {
   if (pending.length) {
     html += '<div class="notice warn">Bei ' + pending.reduce((a, c) => a + c.count, 0) +
       " Aufgaben läuft die Verarbeitung noch. Bitte in einigen Minuten aktualisieren.</div>";
+  }
+  if (run.ohneLabel && run.ohneLabel.length) {
+    html += '<div class="notice warn"><strong>' + run.ohneLabel.length +
+      " Aufgaben ohne Label-Änderung:</strong> " + projektSatz(run.ohneLabel) +
+      " gibt es kein Label „" + esc(run.labelText) + "“. Es lässt sich nur in " +
+      "Project for the Web anlegen – dort einen freien Label-Platz umbenennen.</div>";
   }
   if (deviations.length) {
     const list = deviations.slice(0, 8).map(d =>
@@ -1367,6 +1533,7 @@ document.addEventListener("click", async ev => {
 $("#edStart").addEventListener("input", validateEdit);
 $("#edEnd").addEventListener("input", validateEdit);
 $("#edPrio").addEventListener("change", validateEdit);
+$("#edLabel").addEventListener("change", validateEdit);
 
 // Auswahlfeld aus PRIO_STUFEN aufbauen, damit die Stufen nur an EINER Stelle
 // stehen und Anzeige und Dialog nicht auseinanderlaufen können.
@@ -1403,16 +1570,17 @@ $("#edSave").addEventListener("click", async () => {
   const startDate = $("#edStart").value || null;
   const endDate   = $("#edEnd").value || null;
   const prio      = $("#edPrio").value || null;
+  const labelText = $("#edLabel").value || null;
   $("#editDlg").close();
 
-  buildConfirm(startDate, endDate, prio);
+  buildConfirm(startDate, endDate, prio, labelText);
   if (!(await askConfirm())) return;
 
   const before = pendingTasks.map(t => ({ id: t.msdyn_projecttaskid }));
   downloadBackupCsv();
 
   try {
-    const run = await writeBulk(startDate, endDate, prio);
+    const run = await writeBulk(startDate, endDate, prio, labelText);
     overlay(true, "Daten werden neu geladen …");
     await loadData();
     lastResultHtml = reportResult(run, before);
