@@ -108,6 +108,7 @@ tbody tr.gesperrt:hover{background:transparent}
 .lb-base{background:#facc15;color:#422006}
 .lb-plan{background:#1d4ed8;color:#fff}
 .lb-exclude{background:#7f1d1d;color:#fff}
+.lb-forecast{background:#6d28d9;color:#fff}
 .lb-other{background:#e8ebef;color:#4b5563}
 td.labels{white-space:normal;max-width:230px}
 a.plink{color:var(--accent);text-decoration:none}
@@ -490,8 +491,9 @@ const istBearbeitbar = t => t.msdyn_ismanual !== true;
 
 // Farbschema laut Vorgabe. Alle uebrigen Labels erscheinen neutral grau,
 // damit nichts verborgen bleibt.
-const LABEL_KLASSEN = { fix: "lb-fix", base: "lb-base", plan: "lb-plan", exclude: "lb-exclude" };
-const LABEL_FILTER  = ["Fix", "Base", "Plan", "Exclude"];
+const LABEL_KLASSEN = { fix: "lb-fix", base: "lb-base", plan: "lb-plan",
+                        exclude: "lb-exclude", forecast: "lb-forecast" };
+const LABEL_FILTER  = ["Fix", "Base", "Plan", "Exclude", "Forecast"];
 const plannerUrl = projektId =>
   CONFIG.plannerBaseUrl + "/" + encodeURIComponent(projektId) + "/org/" + CONFIG.plannerOrgId;
 
