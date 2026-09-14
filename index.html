@@ -263,6 +263,29 @@ dialog::backdrop{background:rgba(16,24,40,.45)}
   </div>
 </dialog>
 
+<dialog id="createDlg">
+  <div>
+    <div class="dlg-head">
+      <h2>Projekt erstellen</h2>
+      <p>Das Projekt entsteht leer &ndash; ohne Buckets und ohne Aufgaben.</p>
+    </div>
+    <div class="dlg-body">
+      <div class="dlg-grid">
+        <div class="field span2"><label for="cpTitle">Titel</label>
+          <input type="text" id="cpTitle" autocomplete="off" placeholder="25-621 - Neubau Lagerhalle"></div>
+        <div class="field span2"><label for="cpTeam">Team</label>
+          <select id="cpTeam"><option value="">Teams werden geladen &hellip;</option></select></div>
+      </div>
+      <div id="createTeamHint" style="margin-top:14px"></div>
+      <div id="createMsg"></div>
+    </div>
+    <div class="dlg-foot">
+      <button type="button" class="btn" id="cpCancel">Abbrechen</button>
+      <button type="button" class="btn primary" id="cpGo" disabled>Erstellen</button>
+    </div>
+  </div>
+</dialog>
+
 <script src="https://cdn.jsdelivr.net/npm/@azure/msal-browser@5.18.0/lib/msal-browser.min.js"
         integrity="sha384-FQfSZjxaWBhzqI7u0+3M2/K/kFajbcK45G1GMnQdDzVZszPTSjjvWY9YEnJ9tEia"
         crossorigin="anonymous" referrerpolicy="no-referrer"></script>
@@ -288,6 +311,19 @@ const CONFIG = {
   plannerBaseUrl: "https://planner.cloud.microsoft/webui/premiumplan",
   plannerOrgId:   "9c0ead57-1236-f011-9a43-000d3a479643",
 
+  // Aufgabenart NEU angelegter Projekte. Fester Aufwand, so festgelegt.
+  // msdyn_schedulemode ist NUR beim Anlegen schreibbar (IsValidForCreate = True,
+  // IsValidForUpdate = False) - ein falscher Wert laesst sich nie wieder
+  // korrigieren, nur durch Loeschen und Neuanlegen.
+  // ACHTUNG: Der Bestand (65 Projekte, Stand 18.08.2026) steht auf 192350001
+  // (Feste Dauer), ebenso das Vorlagenprojekt von New-ProjectFromTemplate.ps1.
+  neueProjektAufgabenart: 192350000,
+
+  // Rechte, die das gewaehlte Team auf dem neuen Projekt bekommt. Wortgleich zu
+  // -FreigabeRechte in New-ProjectFromTemplate.ps1. DeleteAccess ist bewusst
+  // dabei, ShareAccess und AssignAccess bewusst nicht.
+  freigabeRechte: "ReadAccess,WriteAccess,AppendAccess,AppendToAccess,DeleteAccess",
+
   pageSize:      100,   // Zeilen je Tabellenseite
   maxOpsPerSet:  200,   // Dataverse-Limit: 200 Operationen je OperationSet
   writeParallel: 6,     // gleichzeitige PssUpdate-Aufrufe je Block
@@ -295,7 +331,17 @@ const CONFIG = {
 };
 
 const SCOPES = [CONFIG.environmentUrl + "/user_impersonation"];
+// Graph ist eine EIGENE Ressource: ein Zugriffstoken gilt immer nur fuer genau
+// eine, Dataverse und Graph lassen sich nicht in einem Token buendeln. Deshalb
+// ein zweiter, getrennter Tokenabruf - siehe getGraphToken().
+const GRAPH_BASE   = "https://graph.microsoft.com/v1.0";
+const GRAPH_SCOPES = ["https://graph.microsoft.com/Group.Read.All"];
 const REDIRECT_URI = location.origin + location.pathname;
+
+// Projektnummer im Titel: die ersten 6 Zeichen, Muster 25-621.
+// New-ProjectFromTemplate.ps1 liest sie von dort und ersetzt damit "XX-XXX" in
+// den Aufgabenbetreffen. Fehlt sie, braucht das Skript -Projektnummer.
+const PROJEKTNUMMER = /^\d\d-\d\d\d/;
 
 const FV = "@OData.Community.Display.V1.FormattedValue";
 const OS_STATUS = {
@@ -421,6 +467,55 @@ async function getToken() {
   return r.accessToken;
 }
 
+/*
+  Token fuer Microsoft Graph.
+
+  Bewusst getrennt von getToken(): Dataverse und Graph sind zwei Ressourcen,
+  ein Zugriffstoken gilt immer nur fuer eine davon.
+
+  Und bewusst OHNE acquireTokenRedirect. getToken() darf umleiten - dort laeuft
+  gerade nichts, was verloren ginge. Hier schon: der Aufruf haengt am Oeffnen des
+  Anlegedialogs, und eine Umleitung wuerde den bereits eingetippten Titel
+  verwerfen. Fehlt die Zustimmung, sagt der Dialog das lieber hin.
+*/
+async function getGraphToken() {
+  try {
+    const r = await pca.acquireTokenSilent({ scopes: GRAPH_SCOPES, account: pca.getActiveAccount() });
+    return r.accessToken;
+  } catch (e) {
+    if (e instanceof msal.InteractionRequiredAuthError) {
+      throw new Error("Fuer Microsoft Graph liegt keine gueltige Zustimmung vor. " +
+        "In der App-Registrierung " + CONFIG.clientId + " muss Group.Read.All als " +
+        "DELEGIERTE Berechtigung eingetragen und vom Administrator bestaetigt sein. " +
+        "Anschliessend einmal ab- und wieder anmelden.");
+    }
+    throw e;
+  }
+}
+
+// Wie dvAll, nur gegen Graph: folgt @odata.nextLink bis alles gelesen ist.
+async function graphAll(path) {
+  const rows = [];
+  let next = GRAPH_BASE + path;
+  while (next) {
+    const res = await fetch(next, {
+      headers: { Authorization: "Bearer " + (await getGraphToken()), Accept: "application/json" }
+    });
+    if (!res.ok) {
+      let msg = "HTTP " + res.status;
+      try {
+        const j = JSON.parse(await res.text());
+        if (j && j.error && j.error.message) msg = j.error.message;
+      } catch (_) {}
+      const err = new Error(msg); err.status = res.status; throw err;
+    }
+    const j = await res.json();
+    rows.push.apply(rows, j.value || []);
+    next = j["@odata.nextLink"] || null;
+  }
+  return rows;
+}
+
 /* ======================================================================
    DATAVERSE-ZUGRIFF
    ====================================================================== */
@@ -510,17 +605,22 @@ const store = { projects: [], tasks: [], byProject: new Map(), projectLabel: new
                 // Labels gehoeren in Project for the Web immer zu genau einem Projekt.
                 labelDefs: new Map() };
 
-async function loadData() {
-  overlay(true, "Projekte werden geladen …");
+/*
+  Liest die Projektliste neu ein - ohne Aufgaben.
+
+  Eigene Funktion, weil es zwei Anlaesse dafuer gibt: den vollstaendigen Ladelauf
+  und das Anlegen eines einzelnen Projekts. Ein frisch angelegtes Projekt hat
+  definitionsgemaess keine Aufgaben, deshalb muessen dafuer nicht alle 5.263
+  nachgeladen werden.
+*/
+async function loadProjects() {
   store.projects = await dvAll("msdyn_projects?$select=" + PROJECT_SELECT + "&$orderby=msdyn_subject asc");
+  buildProjectLabels();
+}
 
-  overlay(true, "Aufgaben werden geladen …");
-  store.tasks = await dvAll(
-    "msdyn_projecttasks?$select=" + TASK_SELECT + "&$orderby=msdyn_subject asc",
-    n => overlay(true, n.toLocaleString("de-DE") + " Aufgaben geladen …")
-  );
-
-  // Bei gleichnamigen Projekten das Startdatum zur Unterscheidung anhängen.
+// Bei gleichnamigen Projekten das Startdatum zur Unterscheidung anhaengen.
+// Gleichnamige Projekte sind in dieser Umgebung Normalzustand, kein Fehler.
+function buildProjectLabels() {
   const nameCount = new Map();
   for (const p of store.projects)
     nameCount.set(p.msdyn_subject, (nameCount.get(p.msdyn_subject) || 0) + 1);
@@ -532,6 +632,17 @@ async function loadData() {
     store.projectLabel.set(p.msdyn_projectid,
       p.msdyn_subject + (dup && d ? " (ab " + d + ")" : ""));
   }
+}
+
+async function loadData() {
+  overlay(true, "Projekte werden geladen …");
+  await loadProjects();
+
+  overlay(true, "Aufgaben werden geladen …");
+  store.tasks = await dvAll(
+    "msdyn_projecttasks?$select=" + TASK_SELECT + "&$orderby=msdyn_subject asc",
+    n => overlay(true, n.toLocaleString("de-DE") + " Aufgaben geladen …")
+  );
 
   // Labels: Verknuepfungstabelle msdyn_projecttasktolabel, Text aus msdyn_projectlabel.
   overlay(true, "Labels werden geladen …");
@@ -688,7 +799,7 @@ function createTable(opt) {
       const aktiv = Object.values(state.f).filter(gesetzt).length;
       html += '<div class="fspacer"></div>';
       if (aktiv)
-        html += '<button class="btn ghost" data-role="fclear">Filter zur\u00fccksetzen (' + aktiv + ')</button>';
+        html += '<button class="btn ghost" data-role="fclear">Filter zurücksetzen (' + aktiv + ')</button>';
       // Hinweistext darf HTML enthalten - er stammt aus dem Aufrufer, nicht aus Daten.
       const hinweis = opt.filterHint ? opt.filterHint(state.f, opt.rows) : "";
       if (hinweis) html += '<div class="fhint">' + hinweis + '</div>';
@@ -1327,6 +1438,201 @@ function reportResult(run, before) {
 }
 
 /* ======================================================================
+   PROJEKT ANLEGEN
+   ====================================================================== */
+
+/* Die Teams des Dialogs, jeweils mit BEIDEN Kennungen:
+     aadId  - Entra-Objekt-Id der Gruppe hinter dem Team (kommt aus Graph)
+     teamId - Dataverse-Team zu dieser Gruppe, oder null
+   Beide werden gebraucht: GrantAccess kennt nur die teamId, waehrend
+   New-ProjectFromTemplate.ps1 -TeamAadId die aadId erwartet. */
+let createTeams = [];
+
+/*
+  Fuellt das Team-Auswahlfeld.
+
+  Zwei Quellen, weil keine allein reicht:
+    - Graph liefert die ECHTEN Teams des Tenants (eine Entra-Gruppe ist noch
+      kein Team - erst resourceProvisioningOptions = 'Team' macht sie dazu).
+    - Dataverse liefert die teamid, ohne die GrantAccess nicht aufrufbar ist.
+
+  Die Schnittmenge ist nicht vollstaendig, und zwar aus einem Grund, der sich
+  nicht umgehen laesst: Gruppenteams entstehen in Dataverse erst, wenn ein
+  Mitglied der Gruppe die Umgebung zum ERSTEN Mal benutzt hat. Zu einem frisch
+  angelegten Team gibt es hier also noch nichts, woran eine Freigabe haengen
+  koennte. Solche Teams werden deshalb angezeigt, aber ausgegraut - sie zu
+  verschweigen hiesse, jemanden nach einem Team suchen zu lassen, das es
+  sichtbar gibt.
+*/
+async function ladeTeams() {
+  const sel = $("#cpTeam");
+  sel.disabled = true;
+  sel.innerHTML = '<option value="">Teams werden geladen …</option>';
+  createTeams = [];
+
+  const [gruppen, dvTeams] = await Promise.all([
+    graphAll("/groups?$filter=" +
+             encodeURIComponent("resourceProvisioningOptions/Any(x:x eq 'Team')") +
+             "&$select=id,displayName&$top=999"),
+    dvAll("teams?$select=teamid,azureactivedirectoryobjectid&$filter=teamtype eq 3")
+  ]);
+
+  const nachAad = new Map();
+  for (const t of dvTeams) {
+    const aad = String(t.azureactivedirectoryobjectid || "").toLowerCase();
+    if (aad) nachAad.set(aad, t.teamid);
+  }
+
+  createTeams = gruppen
+    .map(g => ({ aadId: g.id,
+                 name: g.displayName || "(ohne Namen)",
+                 teamId: nachAad.get(String(g.id).toLowerCase()) || null }))
+    .sort((a, b) => a.name.localeCompare(b.name, "de"));
+
+  sel.innerHTML = '<option value="">Bitte wählen …</option>' +
+    createTeams.map(t => t.teamId
+      ? '<option value="' + esc(t.teamId) + '">' + esc(t.name) + "</option>"
+      : '<option value="" disabled>' + esc(t.name) +
+        " – in Dataverse noch nicht vorhanden</option>").join("");
+  sel.disabled = false;
+
+  const ohne = createTeams.filter(t => !t.teamId).length;
+  $("#createTeamHint").innerHTML = ohne
+    ? '<div class="notice info">' + ohne + " von " + createTeams.length +
+      " Teams sind ausgegraut: zu ihnen gibt es in Dataverse noch kein Team. " +
+      "Gruppenteams entstehen dort erst, wenn ein Mitglied der Gruppe die Umgebung " +
+      "zum ersten Mal benutzt hat – vorher lässt sich nichts freigeben.</div>"
+    : "";
+}
+
+async function openCreateProject() {
+  const dlg = $("#createDlg");
+  $("#cpTitle").value = "";
+  $("#createMsg").innerHTML = "";
+  $("#createTeamHint").innerHTML = "";
+  $("#cpGo").disabled = true;
+  dlg.showModal();
+  $("#cpTitle").focus();
+
+  // Die Teamliste wird bei JEDEM Oeffnen frisch geholt, nicht beim Anmelden:
+  // faellt Graph aus, soll das den Rest der Anwendung nicht mitreissen.
+  try {
+    await ladeTeams();
+  } catch (err) {
+    $("#cpTeam").innerHTML = '<option value="">– keine Teams –</option>';
+    $("#createTeamHint").innerHTML =
+      '<div class="notice err"><strong>Die Teamliste konnte nicht geladen werden.</strong><br>' +
+      esc(err.message) + "</div>";
+  }
+  validateCreate();
+}
+
+/* Beide Pruefungen WARNEN nur. Die Projektnummer ist Konvention, keine Regel -
+   16 von 65 Bestandsprojekten tragen keine. Und gleichnamige Projekte sind in
+   dieser Umgebung Normalzustand, die Liste unterscheidet sie ohnehin. */
+function validateCreate() {
+  const titel  = $("#cpTitle").value.trim();
+  const teamId = $("#cpTeam").value;
+  let html = "";
+
+  if (titel && !PROJEKTNUMMER.test(titel)) {
+    html += '<div class="notice warn">Der Titel beginnt nicht mit einer Projektnummer im Muster ' +
+      "<code>25-621</code>. Das Projekt lässt sich anlegen, aber " +
+      "<code>New-ProjectFromTemplate.ps1</code> kann die Nummer später nicht aus dem " +
+      "Namen ermitteln und braucht dann <code>-Projektnummer</code>.</div>";
+  }
+  if (titel && store.projects.some(p => p.msdyn_subject === titel)) {
+    html += '<div class="notice warn">Ein Projekt mit genau diesem Titel gibt es bereits. ' +
+      "Das ist zulässig – die Liste unterscheidet gleichnamige Projekte " +
+      "über ihr Startdatum.</div>";
+  }
+
+  $("#createMsg").innerHTML = html;
+  $("#cpGo").disabled = !(titel && teamId);
+}
+
+async function createProject() {
+  const titel = $("#cpTitle").value.trim();
+  const team  = createTeams.find(t => t.teamId && t.teamId === $("#cpTeam").value);
+  if (!titel || !team) return;
+
+  $("#cpGo").disabled = true;
+  overlay(true, "Projekt wird angelegt …");
+
+  // --- Schritt 1: Projekt -------------------------------------------------
+  // msdyn_schedulemode ist NUR hier schreibbar. Wird es beim Anlegen nicht
+  // gesetzt, traegt das Projekt fuer immer den falschen Wert - korrigieren
+  // laesst es sich danach nur durch Loeschen und Neuanlegen.
+  let projectId = null;
+  try {
+    const neu = await dv("msdyn_projects", {
+      method: "POST",
+      headers: { Prefer: "return=representation" },
+      body: { msdyn_subject: titel, msdyn_schedulemode: CONFIG.neueProjektAufgabenart }
+    });
+    projectId = neu && neu.msdyn_projectid;
+    if (!projectId) throw new Error("Dataverse hat keine Projekt-Id zurückgegeben.");
+  } catch (err) {
+    overlay(false);
+    $("#createMsg").innerHTML =
+      '<div class="notice err"><strong>Das Projekt wurde nicht angelegt.</strong><br>' +
+      esc(err.message) + "</div>";
+    $("#cpGo").disabled = false;
+    return;
+  }
+
+  // --- Schritt 2: Freigabe ------------------------------------------------
+  // Ab hier EXISTIERT das Projekt. Scheitert die Freigabe, bleibt es stehen:
+  // ein DELETE auf msdyn_project ist in dieser Umgebung nirgends erprobt, und
+  // ein Projekt ohne Freigabe richtet keinen Schaden an - es fehlt nur ein
+  // Schritt, der sich nachholen laesst. Der Dialog schliesst trotzdem, damit
+  // niemand auf "Erstellen" drueckt und ein zweites Projekt erzeugt.
+  let freigabeFehler = null;
+  try {
+    overlay(true, "Projekt wird für das Team freigegeben …");
+    await dv("GrantAccess", { method: "POST", body: {
+      Target: { "@odata.type": "Microsoft.Dynamics.CRM.msdyn_project", msdyn_projectid: projectId },
+      PrincipalAccess: {
+        Principal:  { "@odata.type": "Microsoft.Dynamics.CRM.team", ownerid: team.teamId },
+        AccessMask: CONFIG.freigabeRechte
+      }
+    }});
+  } catch (err) {
+    freigabeFehler = err.message;
+  }
+
+  $("#createDlg").close();
+
+  // Nur die Projektliste nachladen. Ein frisches Projekt hat keine Aufgaben
+  // und keine Label-Verknuepfungen - loadData() waere hier der falsche Hammer.
+  overlay(true, "Projektliste wird aktualisiert …");
+  try { await loadProjects(); }
+  catch (err) { /* Das Projekt steht trotzdem - beim naechsten Laden ist es da. */ }
+  overlay(false);
+
+  const skript = "New-ProjectFromTemplate.ps1 -ProjectId '" + projectId +
+                 "' -TeamAadId '" + team.aadId + "'";
+
+  lastResultHtml = freigabeFehler
+    ? '<div class="notice err"><strong>Das Projekt „' + esc(titel) +
+      "“ wurde angelegt, die Freigabe ist gescheitert.</strong><br>Meldung: " +
+      esc(freigabeFehler) + "<ul><li>Projekt-Id: <code>" + esc(projectId) + "</code></li>" +
+      "<li>Team: „" + esc(team.name) + "“ (Entra-Id <code>" + esc(team.aadId) +
+      "</code>)</li></ul>Das Projekt steht in Dataverse und wurde <strong>nicht</strong> " +
+      "entfernt. Bis die Freigabe nachgeholt ist, sieht das Team es nicht. Nachholen " +
+      "lässt sie sich in Project for the Web oder am Ende von " +
+      "<code>" + esc(skript) + "</code>. Häufigste Ursache: die Sicherheitsrolle des " +
+      "angemeldeten Benutzers trägt kein <code>Share</code>-Recht auf " +
+      "<code>msdyn_project</code>.</div>"
+    : '<div class="notice ok"><strong>Projekt „' + esc(titel) +
+      "“ wurde angelegt</strong> und für das Team „" + esc(team.name) +
+      "“ freigegeben. Es enthält noch keine Buckets und keine Aufgaben – " +
+      "die Vorlage kopiert <code>" + esc(skript) + "</code> hinein.</div>";
+
+  route();
+}
+
+/* ======================================================================
    ANSICHTEN
    ====================================================================== */
 let lastResultHtml = "";
@@ -1337,7 +1643,12 @@ function viewProjects() {
   v.appendChild(el("div", { class: "page-head" },
     "<div><h1>Projekte</h1><div class='sub'>" + store.projects.length +
     " Projekte · Klicken Sie eine Zeile an, um die Details zu öffnen.</div></div>" +
-    "<button class='btn' data-role='reload'>Aktualisieren</button>"));
+    "<div style='display:flex;gap:10px'>" +
+    "<button class='btn primary' data-role='create-project'>Projekt erstellen</button>" +
+    "<button class='btn' data-role='reload'>Aktualisieren</button></div>"));
+
+  // Ergebnis des letzten Anlegevorgangs - einmalig, wie bei der Massenbearbeitung.
+  if (lastResultHtml) { v.appendChild(el("div", {}, lastResultHtml)); lastResultHtml = ""; }
 
   const tbl = createTable({
     columns: projectColumns,
@@ -1440,7 +1751,7 @@ function taskFilters() {
       optionRender: o => labelChip(o.t),
       test: (r, w) => w.some(v => (r.__labelsLower || []).includes(v.toLowerCase())) },
 
-    { key: "prio", label: "Priorit\u00e4t", type: "select",
+    { key: "prio", label: "Priorität", type: "select",
       // Gefiltert wird nach der STUFE, nicht nach der Zahl - passend zur Anzeige
       // in der Spalte. Sortiert nach Dringlichkeit, nicht alphabetisch.
       optionen: rows => {
@@ -1471,7 +1782,7 @@ function taskFilterHint(f, rows) {
   if (!ohne) return "";
   return "Der Zeitraum wirkt auf <strong>msdyn_start</strong> und <strong>msdyn_finish</strong>. " +
     "<strong>" + ohne.toLocaleString("de-DE") + "</strong> Aufgaben haben dort keinen Wert und sind " +
-    "deshalb ausgeblendet \u2013 darunter alle manuell geplanten. Die Spalten " +
+    "deshalb ausgeblendet – darunter alle manuell geplanten. Die Spalten " +
     "<em>Startdatum</em>/<em>Enddatum</em> zeigen dagegen msdyn_scheduledstart/-end.";
 }
 
@@ -1527,9 +1838,9 @@ function route() {
    START
    ====================================================================== */
 document.addEventListener("click", async ev => {
-  if (ev.target.dataset && ev.target.dataset.role === "reload") {
-    await loadData(); route();
-  }
+  if (!ev.target.dataset) return;
+  if (ev.target.dataset.role === "reload") { await loadData(); route(); }
+  if (ev.target.dataset.role === "create-project") await openCreateProject();
 });
 
 $("#edStart").addEventListener("input", validateEdit);
@@ -1547,7 +1858,12 @@ for (const st of PRIO_STUFEN) {
 }
 $("#logout").addEventListener("click", () => pca.logoutRedirect());
 
+$("#cpTitle").addEventListener("input", validateCreate);
+$("#cpTeam").addEventListener("change", validateCreate);
+$("#cpGo").addEventListener("click", createProject);
+
 // Abbrechen schließt nur – es passiert nichts.
+$("#cpCancel").addEventListener("click", () => $("#createDlg").close());
 $("#edCancel").addEventListener("click", () => $("#editDlg").close());
 $("#cfCancel").addEventListener("click", () => $("#confirmDlg").close());
 
