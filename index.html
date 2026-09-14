@@ -1563,12 +1563,20 @@ async function createProject() {
   // msdyn_schedulemode ist NUR hier schreibbar. Wird es beim Anlegen nicht
   // gesetzt, traegt das Projekt fuer immer den falschen Wert - korrigieren
   // laesst es sich danach nur durch Loeschen und Neuanlegen.
+  //
+  // ver_aadgroupid haelt die Entra-Gruppen-Id des gewaehlten Teams fest. Sie
+  // steht in keiner Standardspalte: die Freigabe hinterlaesst nur die
+  // Dataverse-teamid, und aus der laesst sich nicht ablesen, WELCHES Team im
+  // Dialog gemeint war. Ohne diese Spalte muesste sie jeder, der spaeter
+  // New-ProjectFromTemplate.ps1 -TeamAadId aufruft, von Hand heraussuchen.
   let projectId = null;
   try {
     const neu = await dv("msdyn_projects", {
       method: "POST",
       headers: { Prefer: "return=representation" },
-      body: { msdyn_subject: titel, msdyn_schedulemode: CONFIG.neueProjektAufgabenart }
+      body: { msdyn_subject: titel,
+              msdyn_schedulemode: CONFIG.neueProjektAufgabenart,
+              ver_aadgroupid: team.aadId }
     });
     projectId = neu && neu.msdyn_projectid;
     if (!projectId) throw new Error("Dataverse hat keine Projekt-Id zurückgegeben.");
