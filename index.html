@@ -177,6 +177,47 @@ dialog::backdrop{background:rgba(16,24,40,.45)}
 .notice ul{margin:7px 0 0;padding-left:18px}
 .notice code{background:rgba(0,0,0,.06);padding:1px 5px;border-radius:3px;font-size:12px}
 
+/* ---------------------------------------------------------------- Roadmap */
+/* Ein Scrollbereich fuer beide Richtungen: Projektspalte klebt links, Monats-
+   kopf klebt oben. Die Ecke braucht beides und liegt deshalb zuoberst. */
+.rm{overflow:auto;max-height:calc(100vh - 250px);min-height:240px;position:relative}
+.rm-inner{position:relative}
+.rm-head{display:flex;position:sticky;top:0;z-index:4;background:#fbfcfd;border-bottom:1px solid var(--line)}
+.rm-corner{flex:0 0 250px;position:sticky;left:0;z-index:5;background:#fbfcfd;
+  border-right:1px solid var(--line);padding:9px 14px;font-size:11.5px;color:var(--muted);font-weight:600}
+.rm-months{position:relative;height:36px;flex:0 0 auto}
+.rm-month{position:absolute;top:0;height:100%;border-left:1px solid var(--line);padding:9px 0 0 6px;
+  font-size:11.5px;font-weight:600;color:var(--muted);text-transform:uppercase;white-space:nowrap;overflow:hidden}
+.rm-month.jan{color:var(--text)}
+.rm-grid{position:absolute;top:0;bottom:0;z-index:0;pointer-events:none}
+.rm-grid div{position:absolute;top:0;bottom:0;border-left:1px solid var(--line)}
+.rm-today{position:absolute;top:0;bottom:0;width:0;border-left:2px solid var(--danger);z-index:2;pointer-events:none}
+.rm-today-tag{position:absolute;top:20px;transform:translateX(-50%);background:var(--danger);color:#fff;
+  font-size:10px;font-weight:700;line-height:14px;padding:0 6px;border-radius:7px;text-transform:none}
+.rm-row{display:flex;position:relative;z-index:1;border-bottom:1px solid var(--line)}
+.rm-row:nth-child(even){background:rgba(16,24,40,.03)}
+.rm-name{flex:0 0 250px;position:sticky;left:0;z-index:3;background:var(--panel);
+  border-right:1px solid var(--line);padding:10px 14px;font-weight:600;font-size:13px;line-height:1.35}
+.rm-row:nth-child(even) .rm-name{background:#f7f8fa}
+.rm-name a{color:var(--text);text-decoration:none;display:block;overflow-wrap:anywhere}
+.rm-name a:hover{color:var(--accent)}
+.rm-name .sub{font-weight:400;margin-top:2px;font-size:12px}
+.rm-lane{position:relative;flex:0 0 auto}
+.rm-bar{position:absolute;height:22px;border-radius:5px;color:#fff;font-size:12px;font-weight:600;
+  line-height:22px;padding:0 8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  text-decoration:none;box-shadow:0 1px 1px rgba(0,0,0,.15)}
+.rm-bar:hover{filter:brightness(1.1)}
+.rm-bar.done{opacity:.5;text-decoration:line-through}
+.rm-ms{position:absolute;display:flex;align-items:center;gap:6px;height:22px;text-decoration:none;
+  font-size:12px;white-space:nowrap}
+.rm-ms .dot{width:14px;height:14px;border-radius:50%;flex:0 0 14px;border:2px solid #fff;
+  box-shadow:0 0 0 1px rgba(0,0,0,.25)}
+.rm-ms .lbl{max-width:200px;overflow:hidden;text-overflow:ellipsis;font-weight:500}
+.rm-ms.done .lbl{opacity:.55;text-decoration:line-through}
+.rm-ms:hover .lbl{text-decoration:underline}
+.rm-zoom{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--muted)}
+.rm-zoom input{width:150px;accent-color:var(--accent);margin:0}
+
 /* ---------------------------------------------------------------- Overlay */
 #overlay{position:fixed;inset:0;background:rgba(245,246,248,.82);display:none;
   align-items:center;justify-content:center;flex-direction:column;gap:14px;z-index:99}
@@ -211,6 +252,10 @@ dialog::backdrop{background:rgba(16,24,40,.45)}
       <a href="#/aufgaben" data-nav="aufgaben">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 6h11M9 12h11M9 18h11"/><path d="M4 6l1 1 2-2M4 12l1 1 2-2M4 18l1 1 2-2"/></svg>
         Projektaufgaben
+      </a>
+      <a href="#/roadmap" data-nav="roadmap">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h9M8 12h10M12 18h9"/><circle cx="5" cy="12" r="1.2"/><circle cx="18" cy="6" r="1.2"/></svg>
+        Roadmap
       </a>
     </nav>
     <div class="userbox">
@@ -575,6 +620,9 @@ const PROJECT_SELECT = "msdyn_projectid,msdyn_subject,msdyn_scheduledstart,msdyn
 const TASK_SELECT = "msdyn_projecttaskid,msdyn_subject,_msdyn_projectbucket_value," +
                     "msdyn_scheduledstart,msdyn_scheduledend,msdyn_priority,msdyn_progress," +
                     "_msdyn_project_value,msdyn_ismanual,msdyn_summary," +
+                    // Fuer die Roadmap: Meilenstein-Kennzeichen und Elternaufgabe
+                    // (um den obersten LP-Knoten je Phase zu finden).
+                    "msdyn_ismilestone,_msdyn_parenttask_value," +
                     // Nur fuer den Zeitraumfilter. ACHTUNG: msdyn_start/msdyn_finish sind
                     // bei manuell geplanten Aufgaben LEER (gepruefte 999 von 5.263 am
                     // 18.08.2026) - siehe Hinweis in der Filterleiste.
@@ -1822,6 +1870,255 @@ function viewTasks() {
 }
 
 /* ======================================================================
+   ROADMAP (Gantt ueber alle Projekte)
+   ====================================================================== */
+// Leistungsphasen-Kuerzel im Betreff: LPH3, Lph. 1, LP 3, LPH5/6 (zwei Phasen).
+// Dieselbe Regel wie in Set-TaskEffortFromProjo.ps1, siehe ANLEITUNG.
+const LP_KUERZEL = /\bLPH?\.?\s?(\d)(?:\s*\/\s*(\d))?/gi;
+function lpCodes(subject) {
+  const out = new Set();
+  for (const m of String(subject || "").matchAll(LP_KUERZEL)) {
+    out.add(m[1]);
+    if (m[2]) out.add(m[2]);
+  }
+  return out;
+}
+
+// Zwoelf kraeftige, gut unterscheidbare Farben - zyklisch nach Zeilenposition.
+// Es geht um die Abgrenzung zur Nachbarzeile, nicht um Wiedererkennung.
+const RM_FARBEN = ["#1d4ed8", "#c2410c", "#047857", "#7e22ce", "#b91c1c", "#0e7490",
+                   "#a16207", "#be185d", "#4d7c0f", "#6d28d9", "#0369a1", "#475569"];
+const RM_NAMEW = 250;        // Breite der Projektspalte (auch im CSS: .rm-corner, .rm-name)
+const RM_SPUR  = 30;         // Hoehe einer Spur (Balken oder Meilenstein)
+const RM_PAD   = 8;          // Abstand oben/unten in der Zeile
+const TAG_MS   = 86400000;
+const MONATE   = ["Jan.", "Feb.", "März", "Apr.", "Mai", "Juni",
+                  "Juli", "Aug.", "Sep.", "Okt.", "Nov.", "Dez."];
+
+// Ueberlebt den Wechsel zwischen den Ansichten, damit Zoom und Suche beim
+// Zurueckkommen noch so stehen, wie man sie verlassen hat.
+const rmState = { zoom: 110, q: "" };
+
+const tagAus = v => { const d = isoDay(v); return d ? new Date(d + "T00:00:00") : null; };
+const einer  = (n, eins, viele) => n.toLocaleString("de-DE") + " " + (n === 1 ? eins : viele);
+
+/*
+  Baut die Zeilen der Roadmap.
+
+  Balken: Aufgaben mit LP-Kuerzel im Betreff, die keinen Vorfahren mit
+  demselben Kuerzel haben - also der oberste Knoten je Phase. So bleibt aus
+  "LPH3 Entwurfsplanung" -> "LPH3 KG420" -> "410 LPH3 ..." genau ein Balken.
+  Ein Elternknoten "Stufe 1: LP 1 - LP 4" verdeckt dagegen kein LPH2-Kind,
+  weil das Kuerzel 2 dort nicht vorkommt.
+
+  Meilensteine: alle mit msdyn_ismilestone, unabhaengig vom Betreff. Ist eine
+  Aufgabe beides, erscheint nur der Kreis - ein Balken mit Dauer 0 waere
+  ohnehin unsichtbar.
+
+  Projekte ohne Balken und ohne Meilenstein fallen weg (so entschieden).
+*/
+function roadmapRows() {
+  const byId = new Map(store.tasks.map(t => [t.msdyn_projecttaskid, t]));
+  const hatVorfahrMitKuerzel = (t, codes) => {
+    const gesehen = new Set();       // Schutz vor Zyklen in den Elternbezuegen
+    let pid = t._msdyn_parenttask_value;
+    while (pid && !gesehen.has(pid)) {
+      gesehen.add(pid);
+      const p = byId.get(pid);
+      if (!p) break;
+      for (const c of lpCodes(p.msdyn_subject)) if (codes.has(c)) return true;
+      pid = p._msdyn_parenttask_value;
+    }
+    return false;
+  };
+
+  const rows = [];
+  for (const p of store.projects) {
+    const bars = [], ms = [];
+    for (const t of store.byProject.get(p.msdyn_projectid) || []) {
+      const start = tagAus(t.msdyn_scheduledstart);
+      if (!start) continue;
+      const end = tagAus(t.msdyn_scheduledend) || start;
+      const item = { t, start, end: end < start ? start : end, done: Number(t.msdyn_progress) >= 1 };
+      if (t.msdyn_ismilestone === true) { ms.push(item); continue; }
+      const codes = lpCodes(t.msdyn_subject);
+      if (!codes.size || hatVorfahrMitKuerzel(t, codes)) continue;
+      bars.push(item);
+    }
+    if (!bars.length && !ms.length) continue;
+    bars.sort((a, b) => a.start - b.start || a.end - b.end);
+    ms.sort((a, b) => a.start - b.start);
+    rows.push({ p, label: store.projectLabel.get(p.msdyn_projectid) || p.msdyn_subject || "", bars, ms });
+  }
+  rows.sort((a, b) => a.label.localeCompare(b.label, "de"));
+  return rows;
+}
+
+function viewRoadmap() {
+  const v = $("#view");
+  v.innerHTML = "";
+  const alle = roadmapRows();
+  const nBars = alle.reduce((s, r) => s + r.bars.length, 0);
+  const nMs   = alle.reduce((s, r) => s + r.ms.length, 0);
+  const ausgeblendet = store.projects.length - alle.length;
+
+  v.appendChild(el("div", { class: "page-head" },
+    "<div><h1>Roadmap</h1><div class='sub'>" +
+    einer(alle.length, "Projekt", "Projekte") + " · " + einer(nBars, "Phase", "Phasen") + " · " +
+    einer(nMs, "Meilenstein", "Meilensteine") + " · Klicken Sie ein Element an, um die Aufgaben des Projekts zu öffnen.</div></div>" +
+    "<button class='btn' data-role='reload'>Aktualisieren</button>"));
+
+  const panel = el("div", { class: "panel" });
+  panel.appendChild(el("div", { class: "toolbar" },
+    '<div class="search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">' +
+    '<circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>' +
+    '<input type="search" id="rmQ" placeholder="Projekt suchen …" value="' + esc(rmState.q) + '"></div>' +
+    '<button class="btn" id="rmHeute" type="button">Heute</button>' +
+    '<label class="rm-zoom">Zoom <input type="range" id="rmZoom" min="40" max="260" step="10" value="' +
+    rmState.zoom + '"></label>' +
+    '<span class="count" id="rmCount"></span>'));
+  if (ausgeblendet > 0)
+    panel.appendChild(el("div", { class: "hinweis" },
+      einer(ausgeblendet, "Projekt", "Projekte") + " ohne LP-Phasen und ohne Meilensteine " +
+      (ausgeblendet === 1 ? "ist" : "sind") + " ausgeblendet."));
+  const scroller = el("div", { class: "rm" });
+  panel.appendChild(scroller);
+  v.appendChild(panel);
+
+  if (!alle.length) {
+    scroller.innerHTML = '<div class="empty">Keine Aufgabe trägt ein LP-Kürzel oder ein Meilenstein-Kennzeichen.</div>';
+    return;
+  }
+
+  // Zeitachse: vom Monatsersten vor dem fruehesten bis zum Monatsersten nach
+  // dem spaetesten Element, je einen Monat Luft, und heute liegt immer drin.
+  const heute = new Date(); heute.setHours(0, 0, 0, 0);
+  let min = heute, max = heute;
+  for (const r of alle) for (const it of r.bars.concat(r.ms)) {
+    if (it.start < min) min = it.start;
+    if (it.end > max) max = it.end;
+  }
+  const achseStart = new Date(min.getFullYear(), min.getMonth() - 1, 1);
+  const achseEnde  = new Date(max.getFullYear(), max.getMonth() + 2, 1);
+  const monate = [];
+  for (let d = new Date(achseStart); d < achseEnde; d = new Date(d.getFullYear(), d.getMonth() + 1, 1))
+    monate.push({ start: d, m: d.getMonth(), y: d.getFullYear(),
+                  tage: new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate() });
+
+  let ppd = 0, xHeute = 0;        // Pixel je Tag und Heute-Position der letzten Zeichnung
+
+  const tip = it => it.t.msdyn_subject + "\n" +
+    (it.t.msdyn_ismilestone ? de(isoDay(it.t.msdyn_scheduledstart))
+                            : de(isoDay(it.t.msdyn_scheduledstart)) + " – " + de(isoDay(it.t.msdyn_scheduledend))) +
+    (it.t.msdyn_progress != null ? "\nFortschritt: " + fmtProgress(it.t.msdyn_progress) : "");
+
+  // Greedy: jedes Element in die erste Spur, deren rechte Kante frei ist.
+  function spuren(items, breite, x) {
+    const kanten = [];
+    return items.map(it => {
+      const x0 = x(it.start), x1 = x0 + breite(it);
+      let k = kanten.findIndex(e => e + 4 <= x0);
+      if (k < 0) { k = kanten.length; kanten.push(0); }
+      kanten[k] = x1;
+      return k;
+    });
+  }
+
+  function draw() {
+    const rows = alle.filter(r => !rmState.q || r.label.toLowerCase().includes(rmState.q));
+    $("#rmCount").textContent = rows.length === alle.length
+      ? einer(rows.length, "Projekt", "Projekte")
+      : rows.length + " von " + einer(alle.length, "Projekt", "Projekten");
+
+    ppd = rmState.zoom / 30.4375;
+    const x = d => Math.round((d - achseStart) / TAG_MS * ppd);
+    const gesamt = x(achseEnde);
+    xHeute = x(heute);
+
+    const inner = el("div", { class: "rm-inner", style: "width:" + (RM_NAMEW + gesamt) + "px" });
+
+    let kopf = '<div class="rm-corner">Projekt</div><div class="rm-months" style="width:' + gesamt + 'px">';
+    for (const mo of monate) {
+      const w = Math.round(mo.tage * ppd);
+      // Wird es eng, zeigt der Januar nur die Jahreszahl - die ist dort wichtiger
+      // als der Monatsname; die uebrigen Monate verzichten dann auf den Text.
+      const jahr = mo.m === 0 || mo === monate[0];
+      const text = w >= 72 ? (jahr ? MONATE[mo.m] + " " + mo.y : MONATE[mo.m])
+                 : w >= 34 ? (jahr ? String(mo.y) : MONATE[mo.m]) : "";
+      kopf += '<div class="rm-month' + (mo.m === 0 ? " jan" : "") + '" style="left:' + x(mo.start) +
+              'px;width:' + w + 'px">' + text + "</div>";
+    }
+    kopf += '<div class="rm-today-tag" style="left:' + xHeute + 'px">Heute</div></div>';
+    inner.appendChild(el("div", { class: "rm-head" }, kopf));
+
+    inner.appendChild(el("div", { class: "rm-grid", style: "left:" + RM_NAMEW + "px;width:" + gesamt + "px" },
+      monate.map(mo => '<div style="left:' + x(mo.start) + 'px"></div>').join("")));
+
+    if (!rows.length) inner.appendChild(el("div", { class: "empty" }, "Kein Projekt passt zur Suche."));
+
+    rows.forEach((r, i) => {
+      const farbe = RM_FARBEN[i % RM_FARBEN.length];
+      const href  = "#/projekte/" + r.p.msdyn_projectid + "/aufgaben";
+      // Meilensteine oben (Kreis + Text), darunter die Balken.
+      const msSpur  = spuren(r.ms, it => 20 + Math.min(200, 6.5 * String(it.t.msdyn_subject || "").length), x);
+      const barSpur = spuren(r.bars, it => Math.max(6, x(it.end) + ppd - x(it.start)), x);
+      const nMsSpuren  = msSpur.length ? Math.max(...msSpur) + 1 : 0;
+      const nBarSpuren = barSpur.length ? Math.max(...barSpur) + 1 : 0;
+      const h = Math.max(1, nMsSpuren + nBarSpuren) * RM_SPUR + 2 * RM_PAD;
+
+      let lane = "";
+      r.ms.forEach((it, j) => {
+        lane += '<a class="rm-ms' + (it.done ? " done" : "") + '" href="' + href + '" style="left:' +
+                (x(it.start) - 7) + "px;top:" + (RM_PAD + msSpur[j] * RM_SPUR + 4) + 'px" title="' + esc(tip(it)) + '">' +
+                '<span class="dot" style="background:' + farbe + '"></span>' +
+                '<span class="lbl" style="color:' + farbe + '">' + esc(it.t.msdyn_subject) + "</span></a>";
+      });
+      r.bars.forEach((it, j) => {
+        const w = Math.max(6, x(it.end) + ppd - x(it.start));
+        lane += '<a class="rm-bar' + (it.done ? " done" : "") + '" href="' + href + '" style="left:' + x(it.start) +
+                "px;width:" + Math.round(w) + "px;top:" + (RM_PAD + (nMsSpuren + barSpur[j]) * RM_SPUR + 4) +
+                "px;background:" + farbe + '" title="' + esc(tip(it)) + '">' +
+                (w >= 40 ? esc(it.t.msdyn_subject) : "") + "</a>";
+      });
+
+      inner.appendChild(el("div", { class: "rm-row", style: "min-height:" + h + "px" },
+        '<div class="rm-name"><a href="' + href + '">' + esc(r.label) + "</a>" +
+        '<div class="sub">' + einer(r.bars.length, "Phase", "Phasen") + " · " +
+        einer(r.ms.length, "Meilenstein", "Meilensteine") + "</div></div>" +
+        '<div class="rm-lane" style="width:' + gesamt + "px;height:" + h + 'px">' + lane + "</div>"));
+    });
+
+    inner.appendChild(el("div", { class: "rm-today", style: "left:" + (RM_NAMEW + xHeute) + "px" }));
+    scroller.innerHTML = "";
+    scroller.appendChild(inner);
+  }
+
+  // Heute ins erste Drittel des sichtbaren Zeitstrahls ruecken.
+  const zuHeute = () => {
+    scroller.scrollLeft = Math.max(0, xHeute - (scroller.clientWidth - RM_NAMEW) / 3);
+  };
+
+  $("#rmQ").addEventListener("input", ev => {
+    rmState.q = ev.target.value.trim().toLowerCase();
+    const links = scroller.scrollLeft;
+    draw();
+    scroller.scrollLeft = links;
+  });
+  $("#rmHeute").addEventListener("click", zuHeute);
+  // Beim Zoomen bleibt der Tag in der Bildmitte stehen.
+  $("#rmZoom").addEventListener("input", ev => {
+    const sicht = scroller.clientWidth - RM_NAMEW;
+    const mitteTag = (scroller.scrollLeft + sicht / 2) / ppd;
+    rmState.zoom = Number(ev.target.value);
+    draw();
+    scroller.scrollLeft = Math.max(0, mitteTag * ppd - sicht / 2);
+  });
+
+  draw();
+  zuHeute();
+}
+
+/* ======================================================================
    ROUTING
    ====================================================================== */
 function route() {
@@ -1832,6 +2129,9 @@ function route() {
   if (parts[0] === "aufgaben") {
     $('nav a[data-nav=aufgaben]').classList.add("active");
     viewTasks();
+  } else if (parts[0] === "roadmap") {
+    $('nav a[data-nav=roadmap]').classList.add("active");
+    viewRoadmap();
   } else if (parts[0] === "projekte" && parts[1]) {
     $('nav a[data-nav=projekte]').classList.add("active");
     viewProjectDetail(parts[1], parts[2]);
