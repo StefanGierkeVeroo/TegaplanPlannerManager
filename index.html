@@ -111,6 +111,24 @@ tbody tr.gesperrt:hover{background:transparent}
 .lb-forecast{background:#6d28d9;color:#fff}
 .lb-other{background:#e8ebef;color:#4b5563}
 td.labels{white-space:normal;max-width:230px}
+
+/* Legende im Kopf von 'Projektaufgaben': Titel und Legende links nebeneinander,
+   der Knopf 'Aktualisieren' bleibt rechts. */
+.head-left{display:flex;align-items:flex-start;gap:36px;flex-wrap:wrap;min-width:0}
+/* Die allgemeinen Tabellenregeln (100 % Breite, sticky-Kopf, grosse Zellen)
+   gelten hier nicht - die Legende ist eine kompakte Infotafel. */
+.legende{width:auto;border-collapse:collapse;font-size:12px;line-height:1.35;color:var(--text);
+  background:var(--panel);border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.legende th,.legende td{padding:2px 12px;text-align:left;white-space:nowrap;vertical-align:middle;
+  border-bottom:0;color:var(--text)}
+.legende thead th{position:static;font-size:11.5px;font-weight:600;color:var(--muted);background:#f7f8fa;
+  border-bottom:1px solid var(--line);padding-top:4px;padding-bottom:4px}
+.legende tbody tr+tr td{border-top:1px solid var(--line)}
+.legende tbody tr:hover{background:transparent}
+.legende td.mark,.legende th.mark{text-align:center}
+.legende th.mark{white-space:normal;line-height:1.2;max-width:96px}
+.legende td.mark{font-weight:600}
+.legende .lb{margin:0}
 a.plink{color:var(--accent);text-decoration:none}
 a.plink:hover{text-decoration:underline}
 
@@ -276,12 +294,14 @@ dialog::backdrop{background:rgba(16,24,40,.45)}
       <p id="editCount"></p>
     </div>
     <div class="dlg-body">
-      <div class="notice info">Es werden ausschließlich <strong>Startdatum</strong>, <strong>Enddatum</strong>, <strong>Priorität</strong> und <strong>Label</strong> geändert. Ein leer gelassenes Feld bleibt in allen Datensätzen unverändert.</div>
+      <div class="notice info">Es werden ausschließlich <strong>Startdatum</strong>, <strong>Enddatum</strong>, <strong>Priorität</strong>, <strong>Aufwand</strong> und <strong>Label</strong> geändert. Ein leer gelassenes Feld bleibt in allen Datensätzen unverändert.</div>
       <div class="dlg-grid">
         <div class="field"><label for="edStart">Startdatum</label><input type="date" id="edStart"></div>
         <div class="field"><label for="edEnd">Enddatum</label><input type="date" id="edEnd"></div>
-        <div class="field span2"><label for="edPrio">Priorität</label>
+        <div class="field"><label for="edPrio">Priorität</label>
           <select id="edPrio"><option value="">(unverändert)</option></select></div>
+        <div class="field"><label for="edEffort">Aufwand (Stunden)</label>
+          <input type="number" id="edEffort" min="0" step="0.25" placeholder="(unverändert)"></div>
         <div class="field span2"><label for="edLabel">Label</label>
           <select id="edLabel"><option value="">(unverändert)</option></select></div>
       </div>
@@ -415,6 +435,14 @@ function fmtProgress(v) {
   if (v === null || v === undefined || v === "") return "";
   return (v * 100).toLocaleString("de-DE", { maximumFractionDigits: 1 }) + " %";
 }
+// Aufwand in Stunden: "2.086,4 h", "3,01 h", "8 h" (so entschieden).
+function fmtEffort(v) {
+  if (v === null || v === undefined || v === "") return "";
+  return Number(v).toLocaleString("de-DE", { maximumFractionDigits: 2 }) + " h";
+}
+// Die Engine rundet msdyn_effort bei zugewiesenen Aufgaben minimal um (3 -> 3,01).
+// Dieselbe Toleranz wie in Set-TaskEffortFromProjo.ps1 (ANLEITUNG 13.4).
+const EFFORT_TOLERANZ = 0.05;
 
 /* Priorität als Adjektiv statt als Zahl. Die Stufen sind fachlich vorgegeben:
    1 = Dringend, 2–4 = Wichtig, 5–7 = Mittel, 8–10 = Niedrig.
@@ -620,6 +648,9 @@ const PROJECT_SELECT = "msdyn_projectid,msdyn_subject,msdyn_scheduledstart,msdyn
 const TASK_SELECT = "msdyn_projecttaskid,msdyn_subject,_msdyn_projectbucket_value," +
                     "msdyn_scheduledstart,msdyn_scheduledend,msdyn_priority,msdyn_progress," +
                     "_msdyn_project_value,msdyn_ismanual,msdyn_summary," +
+                    // Aufwand in Stunden. Bei Sammelaufgaben von der Engine aus den
+                    // Kindern errechnet, dort also nicht schreibbar (ANLEITUNG 13).
+                    "msdyn_effort," +
                     // Fuer die Roadmap: Meilenstein-Kennzeichen und Elternaufgabe
                     // (um den obersten LP-Knoten je Phase zu finden).
                     "msdyn_ismilestone,_msdyn_parenttask_value," +
@@ -637,12 +668,35 @@ const istBearbeitbar = t => t.msdyn_ismanual !== true;
 const LABEL_KLASSEN = { fix: "lb-fix", base: "lb-base", plan: "lb-plan",
                         exclude: "lb-exclude", forecast: "lb-forecast" };
 const LABEL_FILTER  = ["Fix", "Base", "Plan", "Exclude", "Forecast"];
+// Legende im Kopf des Menues 'Projektaufgaben' - Bedeutung und Auslastungsart
+// je Label laut fachlicher Vorgabe (21.09.2026). Reihenfolge wie in der Vorgabe.
+//   verbindlich: zaehlt in die verbindliche Auslastung
+//   erwartet:    zaehlt in die erwartete Auslastung
+const LABEL_LEGENDE = [
+  { label: "Fix",      bedeutung: "beauftragt, verbindlich",                          verbindlich: true,  erwartet: false },
+  { label: "Base",     bedeutung: "Allg. Büroarbeit, Akquise, PL-Tätigkeiten etc.",   verbindlich: true,  erwartet: false },
+  { label: "Plan",     bedeutung: "Kapa-Blocker",                                     verbindlich: false, erwartet: true  },
+  { label: "Forecast", bedeutung: "beauftragt, zukünftig wahrscheinlich",             verbindlich: false, erwartet: true  },
+  { label: "Exclude",  bedeutung: "Pläne in Vorbereitung, zählt nicht in die Auslastung", verbindlich: false, erwartet: false }
+];
 const plannerUrl = projektId =>
   CONFIG.plannerBaseUrl + "/" + encodeURIComponent(projektId) + "/org/" + CONFIG.plannerOrgId;
 
 const labelChip = text =>
   '<span class="lb ' + (LABEL_KLASSEN[String(text).trim().toLowerCase()] || "lb-other") +
   '">' + esc(text) + "</span>";
+
+// Legende aus LABEL_LEGENDE - das Label links als Chip in seiner Farbe.
+function labelLegende() {
+  const mark = b => '<td class="mark">' + (b ? "X" : "") + "</td>";
+  return '<table class="legende" aria-label="Bedeutung der Labels"><thead><tr>' +
+    "<th>Label</th><th>Bedeutung</th>" +
+    '<th class="mark">verbindliche Auslastung</th><th class="mark">erwartete Auslastung</th>' +
+    "</tr></thead><tbody>" +
+    LABEL_LEGENDE.map(z => "<tr><td>" + labelChip(z.label) + "</td><td>" + esc(z.bedeutung) + "</td>" +
+                            mark(z.verbindlich) + mark(z.erwartet) + "</tr>").join("") +
+    "</tbody></table>";
+}
 
 const store = { projects: [], tasks: [], byProject: new Map(), projectLabel: new Map(),
                 labelsByTask: new Map(),
@@ -651,7 +705,13 @@ const store = { projects: [], tasks: [], byProject: new Map(), projectLabel: new
                 linksByTask: new Map(),
                 // Label-Definitionen je Projekt: Map(projektId -> Map(textKlein -> labelId)).
                 // Labels gehoeren in Project for the Web immer zu genau einem Projekt.
-                labelDefs: new Map() };
+                labelDefs: new Map(),
+                // Namen der zugewiesenen Ressourcen je Aufgabe (msdyn_resourceassignment),
+                // alphabetisch. Nur lesend - die Spalte "Verantwortlich".
+                assigneesByTask: new Map(),
+                // Fehlertext, falls die Zuweisungen nicht geladen werden konnten
+                // (typisch: fehlendes Leserecht). Die Kernfunktion laeuft dann ohne sie.
+                assigneesError: "" };
 
 /*
   Liest die Projektliste neu ein - ohne Aufgaben.
@@ -724,6 +784,8 @@ async function loadData() {
     if (!m.has(txt.toLowerCase())) m.set(txt.toLowerCase(), d.msdyn_projectlabelid);
   }
 
+  await loadAssignments();
+
   store.byProject.clear();
   for (const t of store.tasks) {
     const pid = t._msdyn_project_value;
@@ -731,10 +793,57 @@ async function loadData() {
     t.__labels      = store.labelsByTask.get(t.msdyn_projecttaskid) || [];
     t.__labelsLower = t.__labels.map(x => x.toLowerCase());
     t.__labelText   = t.__labels.join(" ");
+    t.__assignees   = store.assigneesByTask.get(t.msdyn_projecttaskid) || [];
+    t.__assigneeText = t.__assignees.join(", ");
     if (!store.byProject.has(pid)) store.byProject.set(pid, []);
     store.byProject.get(pid).push(t);
   }
   overlay(false);
+}
+
+/*
+  Ressourcenzuweisungen fuer die Spalte "Verantwortlich".
+
+  Bewusst fehlertolerant (so entschieden): Wer kein Leserecht auf
+  msdyn_resourceassignment oder bookableresource hat, soll Termine, Prioritaet,
+  Aufwand und Labels trotzdem bearbeiten koennen. Die Spalte bleibt dann leer
+  und ueber der Aufgabenliste steht ein Hinweis mit der Ursache.
+*/
+async function loadAssignments() {
+  overlay(true, "Zuweisungen werden geladen …");
+  store.assigneesByTask.clear();
+  store.assigneesError = "";
+  let rows;
+  try {
+    rows = await dvAll("msdyn_resourceassignments?$select=msdyn_resourceassignmentid," +
+                       "_msdyn_taskid_value,_msdyn_bookableresourceid_value");
+  } catch (err) {
+    store.assigneesError = err.message + (err.status ? " (HTTP " + err.status + ")" : "");
+    return;
+  }
+  for (const a of rows) {
+    const tid  = a._msdyn_taskid_value;
+    // Der Name kommt per Annotation mit - bei Personen der Anzeigename des
+    // verknuepften Benutzers, bei Team-/generischen Ressourcen deren Name.
+    const name = (a["_msdyn_bookableresourceid_value" + FV] || "").trim();
+    if (!tid || !name) continue;
+    if (!store.assigneesByTask.has(tid)) store.assigneesByTask.set(tid, []);
+    const arr = store.assigneesByTask.get(tid);
+    if (!arr.includes(name)) arr.push(name);
+  }
+  for (const arr of store.assigneesByTask.values()) arr.sort((a, b) => a.localeCompare(b, "de"));
+}
+
+// Feste Option des Filters "Verantwortlich" - Aufgaben ohne einzige Zuweisung.
+const OHNE_ZUWEISUNG = "(ohne Zuweisung)";
+
+// Hinweis ueber der Aufgabenliste, wenn die Zuweisungen fehlen.
+function assigneesNotice() {
+  if (!store.assigneesError) return null;
+  return el("div", { class: "notice warn", style: "margin-bottom:14px" },
+    "<strong>Zuweisungen konnten nicht geladen werden:</strong> " + esc(store.assigneesError) +
+    ". Die Spalte <em>Verantwortlich</em> bleibt leer. Prüfe die Leserechte auf " +
+    "<code>msdyn_resourceassignment</code> und <code>bookableresource</code>.");
 }
 
 /* ======================================================================
@@ -1055,7 +1164,15 @@ function taskColumns(withProject, withLabels) {
       render: r => esc(fmtPrioritaet(r.msdyn_priority)) },
     { key: "msdyn_progress", label: "Fortschritt", cls: "num",
       sortValue: r => (r.msdyn_progress === null || r.msdyn_progress === undefined ? "" : r.msdyn_progress),
-      render: r => esc(fmtProgress(r.msdyn_progress)) }
+      render: r => esc(fmtProgress(r.msdyn_progress)) },
+    { key: "msdyn_effort", label: "Aufwand", cls: "num",
+      sortValue: r => (r.msdyn_effort === null || r.msdyn_effort === undefined ? "" : Number(r.msdyn_effort)),
+      render: r => esc(fmtEffort(r.msdyn_effort)) },
+    // Zugewiesene Ressourcen, kommagetrennt - keine Chips, damit die Spalte bei
+    // mehreren Personen nicht ausufert (so entschieden).
+    { key: "assignees", label: "Verantwortlich",
+      sortValue: r => (r.__assigneeText || "").toLowerCase(),
+      render: r => esc(r.__assigneeText || "") }
   );
   if (withLabels) cols.push({ key: "labels", label: "Labels", cls: "labels",
     sortValue: r => (r.__labels || []).join(", ").toLowerCase(),
@@ -1081,6 +1198,7 @@ function openBulkEdit(ids, onDone) {
   $("#edStart").value = "";
   $("#edEnd").value = "";
   $("#edPrio").value = "";
+  $("#edEffort").value = "";
   // Auswahlliste aus dem Farbschema aufbauen; Chips waeren in einem <option>
   // nicht darstellbar, deshalb nur der Text.
   $("#edLabel").innerHTML = '<option value="">(unverändert)</option>' +
@@ -1097,15 +1215,34 @@ function openBulkEdit(ids, onDone) {
 
 function validateEdit() {
   const s = $("#edStart").value, e = $("#edEnd").value, p = $("#edPrio").value;
-  const lab = $("#edLabel").value;
+  const lab = $("#edLabel").value, eff = $("#edEffort").value;
   const msg = $("#editMsg");
   msg.innerHTML = "";
 
   // Nichts ausgefüllt – es gibt nichts zu speichern.
-  if (!s && !e && !p && !lab) { $("#edSave").disabled = true; return; }
+  if (!s && !e && !p && !lab && !eff) { $("#edSave").disabled = true; return; }
+
+  // Aufwand: eine nicht-negative Zahl. Der Browser laesst bei type=number zwar
+  // keine Buchstaben durch, aber ein Minus schon.
+  if (eff && !(Number(eff) >= 0)) {
+    msg.innerHTML = '<div class="notice err" style="margin:14px 0 0">Der Aufwand muss eine Zahl ab 0 sein.</div>';
+    $("#edSave").disabled = true; return;
+  }
 
   // Hinweis (kein Fehler): In manchen Projekten gibt es das Label nicht.
   let labelHinweis = "";
+  // Hinweis (kein Fehler): Der Aufwand einer Sammelaufgabe ergibt sich aus den
+  // Unteraufgaben. Er wird dort weggelassen, die uebrigen Felder trotzdem
+  // geschrieben - ein abgewiesener Datensatz wuerde sonst den ganzen Block
+  // scheitern lassen (so entschieden).
+  if (eff) {
+    const sammel = pendingTasks.filter(t => t.msdyn_summary === true).length;
+    if (sammel) {
+      labelHinweis += '<div class="notice warn" style="margin:14px 0 0"><strong>Bei ' + sammel +
+        " Sammelaufgabe" + (sammel === 1 ? "" : "n") + " wird der Aufwand nicht gesetzt</strong> – er " +
+        "ergibt sich aus den Unteraufgaben. Die übrigen Felder werden dort trotzdem geändert.</div>";
+    }
+  }
   if (lab) {
     const { plan, ohneLabel } = planeLabel(lab);
     const verlieren = pendingTasks.filter(t => {
@@ -1150,7 +1287,8 @@ function validateEdit() {
   $("#edSave").disabled = false;
 }
 
-function buildConfirm(startDate, endDate, prio, labelText) {
+function buildConfirm(startDate, endDate, prio, labelText, effort) {
+  const hatEffort = effort !== null && effort !== undefined && effort !== "";
   const byProj = new Map();
   for (const t of pendingTasks) {
     const k = t.__projectLabel || "(ohne Projekt)";
@@ -1174,9 +1312,15 @@ function buildConfirm(startDate, endDate, prio, labelText) {
                  "</strong> <span style='color:#6b7684'>(gespeichert als " + esc(prio) + ")</span></p>" : "") +
     (!startDate ? "<p style='margin:0 0 4px;color:#6b7684'>Startdatum bleibt unverändert.</p>" : "") +
     (!endDate   ? "<p style='margin:0 0 4px;color:#6b7684'>Enddatum bleibt unverändert.</p>" : "") +
+    (hatEffort  ? "<p style='margin:0 0 4px'>Aufwand → <strong>" + esc(fmtEffort(Number(effort))) + "</strong></p>" : "") +
     (labelText  ? "<p style='margin:0 0 4px'>Label → <strong>" + esc(labelText) + "</strong></p>" : "") +
     (!prio      ? "<p style='margin:0 0 4px;color:#6b7684'>Priorität bleibt unverändert.</p>" : "") +
+    (!hatEffort ? "<p style='margin:0 0 4px;color:#6b7684'>Aufwand bleibt unverändert.</p>" : "") +
     (!labelText ? "<p style='margin:0 0 4px;color:#6b7684'>Label bleibt unverändert.</p>" : "") +
+    ((hatEffort && sammel)
+      ? '<div class="notice warn" style="margin:14px 0"><strong>Bei ' + sammel + " Sammelaufgabe" +
+        (sammel === 1 ? "" : "n") + " wird der Aufwand nicht gesetzt</strong> – er ergibt sich aus den " +
+        "Unteraufgaben. Die übrigen Felder werden dort trotzdem geändert.</div>" : "") +
     (labelText && lp.ohneLabel.length
       ? '<div class="notice warn" style="margin:14px 0"><strong>' + lp.ohneLabel.length +
         " Aufgaben bekommen kein Label.</strong> " + projektSatz(lp.ohneLabel) +
@@ -1186,9 +1330,12 @@ function buildConfirm(startDate, endDate, prio, labelText) {
         " Aufgaben werden bestehende Labels entfernt</strong> und durch „" + esc(labelText) +
         "“ ersetzt. Auch Labels außerhalb des Farbschemas sind davon betroffen.</div>" : "") +
     // Die Engine-Warnung nur zeigen, wenn wirklich Termine geschrieben werden.
-    // Eine reine Prioritätsänderung verschiebt keinen Termin.
-    ((startDate || endDate)
-      ? '<div class="notice warn" style="margin:14px 0">Die Planungs-Engine rechnet den Zeitplan neu. Termine können auf Arbeitstage gerückt werden, <strong>abhängige Aufgaben und das Projektende können sich mit verschieben</strong>. Der Vorgang lässt sich nicht rückgängig machen.</div>'
+    // Eine reine Prioritätsänderung verschiebt keinen Termin. Ein neuer Aufwand
+    // dagegen schon: bei "Fester Aufwand" rechnet die Engine daraus die Dauer.
+    ((startDate || endDate || hatEffort)
+      ? '<div class="notice warn" style="margin:14px 0">Die Planungs-Engine rechnet den Zeitplan neu. Termine können auf Arbeitstage gerückt werden, <strong>abhängige Aufgaben und das Projektende können sich mit verschieben</strong>.' +
+        (hatEffort ? ' Bei Aufgaben mit fester Dauer oder festen Einheiten kann die Engine den Aufwand außerdem umrechnen.' : '') +
+        ' Der Vorgang lässt sich nicht rückgängig machen.</div>'
       : '<div class="notice warn" style="margin:14px 0">Der Vorgang lässt sich nicht rückgängig machen.</div>') +
     ((sammel && (startDate || endDate)) ? '<div class="notice warn" style="margin:14px 0"><strong>' + sammel +
       " der ausgewählten Aufgaben sind Sammelaufgaben.</strong> Deren Termine leiten sich aus den " +
@@ -1201,7 +1348,8 @@ function buildConfirm(startDate, endDate, prio, labelText) {
 
 function downloadBackupCsv() {
   const head = ["Aufgaben-ID", "Projekt", "Aufgabe", "Startdatum (vorher)", "Enddatum (vorher)",
-                "Priorität (vorher)", "Prioritätsstufe (vorher)", "Labels (vorher)"];
+                "Priorität (vorher)", "Prioritätsstufe (vorher)", "Aufwand h (vorher)",
+                "Labels (vorher)", "Verantwortlich"];
   const lines = [head.join(";")];
   for (const t of pendingTasks) {
     lines.push([
@@ -1212,7 +1360,12 @@ function downloadBackupCsv() {
       isoDay(t.msdyn_scheduledend),
       (t.msdyn_priority === null || t.msdyn_priority === undefined ? "" : t.msdyn_priority),
       '"' + fmtPrioritaet(t.msdyn_priority) + '"',
-      '"' + (t.__labels || []).join("; ").replace(/"/g, '""') + '"'
+      // Dezimalkomma, damit Excel (de-DE) die Spalte als Zahl liest
+      (t.msdyn_effort === null || t.msdyn_effort === undefined ? "" : String(t.msdyn_effort).replace(".", ",")),
+      '"' + (t.__labels || []).join("; ").replace(/"/g, '""') + '"',
+      // Wird nicht geaendert - reine Kontextspalte, um die Sicherung spaeter
+      // einer Person zuordnen zu koennen.
+      '"' + (t.__assignees || []).join("; ").replace(/"/g, '""') + '"'
     ].join(";"));
   }
   const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
@@ -1314,19 +1467,23 @@ function planeLabel(labelText) {
   return { plan, ohneLabel };
 }
 
-async function writeBulk(startDate, endDate, prio, labelText) {
+async function writeBulk(startDate, endDate, prio, labelText, effort) {
   const startIso = startDate ? startDate + "T" + CONFIG.startTimeUtc + "Z" : null;
   const endIso   = endDate   ? endDate   + "T" + CONFIG.endTimeUtc   + "Z" : null;
+  const effortNum = (effort !== null && effort !== undefined && effort !== "") ? Number(effort) : null;
 
   const { plan, ohneLabel } = planeLabel(labelText);
-  const feldAenderung = !!(startIso || endIso || prio);
+  // Aufwand zaehlt bei Sammelaufgaben nicht als Feldaenderung - dort wird er
+  // nicht geschrieben (siehe validateEdit).
+  const effortFuer = t => effortNum !== null && t.msdyn_summary !== true;
+  const feldAenderungFuer = t => !!(startIso || endIso || prio || effortFuer(t));
 
   // Je Aufgabe zaehlen, wie viele Operationen noetig sind. Eine Aufgabe ohne
   // jede Aenderung wird gar nicht erst uebergeben.
   const aufgaben = [];
   for (const t of pendingTasks) {
     const lp = plan.get(t.msdyn_projecttaskid) || null;
-    const ops = (feldAenderung ? 1 : 0) + (lp ? lp.loeschen.length + (lp.anlegen ? 1 : 0) : 0);
+    const ops = (feldAenderungFuer(t) ? 1 : 0) + (lp ? lp.loeschen.length + (lp.anlegen ? 1 : 0) : 0);
     if (ops > 0) aufgaben.push({ t, lp, ops });
   }
 
@@ -1373,7 +1530,7 @@ async function writeBulk(startDate, endDate, prio, labelText) {
         osId = os.OperationSetId;
 
         await mapLimit(chunk, CONFIG.writeParallel, async a => {
-          if (feldAenderung) {
+          if (feldAenderungFuer(a.t)) {
             const entity = {
               "@odata.type": "Microsoft.Dynamics.CRM.msdyn_projecttask",
               msdyn_projecttaskid: a.t.msdyn_projecttaskid
@@ -1383,6 +1540,11 @@ async function writeBulk(startDate, endDate, prio, labelText) {
             // msdyn_priority ist über PssUpdateV1 schreibbar und darf in derselben
             // Operation stehen wie die Termine (geprüft am 18.08.2026).
             if (prio)     entity.msdyn_priority       = Number(prio);
+            // msdyn_effort ist über PssUpdateV1 schreibbar (Set-TaskEffortFromProjo.ps1,
+            // ANLEITUNG 13.4). Ob die Engine es GEMEINSAM mit Terminen in einer
+            // Operation annimmt, ist noch nicht im Echtlauf geprüft – Rückfall wäre
+            // eine zweite PssUpdateV1-Operation nur für den Aufwand.
+            if (effortFuer(a.t)) entity.msdyn_effort  = effortNum;
             await dv("msdyn_PssUpdateV1", { method: "POST", body: { Entity: entity, OperationSetId: osId } });
           }
           if (!a.lp) return;
@@ -1421,7 +1583,8 @@ async function writeBulk(startDate, endDate, prio, labelText) {
       }
     }
   }
-  return { results, startDate, endDate, prio: prio ? Number(prio) : null, labelText, ohneLabel };
+  return { results, startDate, endDate, prio: prio ? Number(prio) : null, labelText, ohneLabel,
+           effort: effortNum };
 }
 
 function reportResult(run, before) {
@@ -1443,6 +1606,15 @@ function reportResult(run, before) {
     if (run.prio && Number(now.msdyn_priority) !== run.prio)
       deviations.push({ t: now, feld: "Priorität", soll: prioText(run.prio),
                         ist: fmtPrioritaet(now.msdyn_priority) });
+    // Aufwand: Sammelaufgaben wurden bewusst nicht geschrieben und werden hier
+    // nicht verglichen. Die Engine rundet bei zugewiesenen Aufgaben minimal um
+    // (3 -> 3,01) - unterhalb EFFORT_TOLERANZ gilt als gleich.
+    if (run.effort !== null && run.effort !== undefined && now.msdyn_summary !== true) {
+      const ist = (now.msdyn_effort === null || now.msdyn_effort === undefined) ? null : Number(now.msdyn_effort);
+      if (ist === null || Math.abs(ist - run.effort) > EFFORT_TOLERANZ)
+        deviations.push({ t: now, feld: "Aufwand", soll: fmtEffort(run.effort),
+                          ist: ist === null ? "" : fmtEffort(ist) });
+    }
   }
 
   let html = "";
@@ -1475,9 +1647,11 @@ function reportResult(run, before) {
       "Project for the Web anlegen – dort einen freien Label-Platz umbenennen.</div>";
   }
   if (deviations.length) {
+    // Nur ISO-Tage durch de() schicken - Prioritaet und Aufwand sind schon Text.
+    const zeig = v => /^\d{4}-\d{2}-\d{2}$/.test(v) ? de(v) : v;
     const list = deviations.slice(0, 8).map(d =>
-      "<li>" + esc(d.t.msdyn_subject) + " – " + d.feld + ": angefordert " + esc(de(d.soll)) +
-      ", gesetzt " + esc(de(d.ist) || "—") + "</li>").join("");
+      "<li>" + esc(d.t.msdyn_subject) + " – " + d.feld + ": angefordert " + esc(zeig(d.soll)) +
+      ", gesetzt " + esc(zeig(d.ist) || "—") + "</li>").join("");
     html += '<div class="notice warn"><strong>Abweichungen im Einzelnen</strong>' +
       " – Ursache sind in der Regel Arbeitstage, Kalender oder Abhängigkeiten:<ul>" +
       list + (deviations.length > 8 ? "<li>… und " + (deviations.length - 8) + " weitere</li>" : "") + "</ul></div>";
@@ -1753,6 +1927,8 @@ function viewProjectDetail(projectId, tab) {
 
   const rows = store.byProject.get(projectId) || [];
   if (lastResultHtml) { v.appendChild(el("div", {}, lastResultHtml)); lastResultHtml = ""; }
+  const zuwHinweis = assigneesNotice();
+  if (zuwHinweis) v.appendChild(zuwHinweis);
 
   const tbl = createTable({
     columns: taskColumns(false),
@@ -1760,8 +1936,8 @@ function viewProjectDetail(projectId, tab) {
     getId: r => r.msdyn_projecttaskid,
     selectable: true,
     canSelect: istBearbeitbar,
-    searchFields: ["msdyn_subject", r => r["_msdyn_projectbucket_value" + FV]],
-    searchPlaceholder: "Aufgabe oder Bucket suchen …",
+    searchFields: ["msdyn_subject", "__assigneeText", r => r["_msdyn_projectbucket_value" + FV]],
+    searchPlaceholder: "Aufgabe, Bucket oder Verantwortlichen suchen …",
     defaultSort: "msdyn_scheduledstart",
     emptyText: "Dieses Projekt hat keine Aufgaben.",
     onEdit: ids => openBulkEdit(ids, () => { tbl.clearSelection(); route(); })
@@ -1799,6 +1975,19 @@ function taskFilters() {
     { key: "bucket", label: "Bucket", type: "select",
       optionen: rows => liste(rows, r => r["_msdyn_projectbucket_value" + FV]),
       test: (r, w) => (r["_msdyn_projectbucket_value" + FV] || "") === w },
+
+    // Einzelauswahl (so entschieden): "Was hat Person X auf dem Tisch?" Eine
+    // Aufgabe passt, wenn die Person unter ihren Zuweisungen ist. Die feste
+    // Option OHNE_ZUWEISUNG beantwortet die zweite Frage: "Was hat noch niemand?"
+    { key: "verantwortlich", label: "Verantwortlich", type: "select",
+      optionen: rows => {
+        const namen = [...new Set(rows.flatMap(r => r.__assignees || []))]
+          .sort((a, b) => a.localeCompare(b, "de")).map(x => ({ w: x, t: x }));
+        return [{ w: OHNE_ZUWEISUNG, t: OHNE_ZUWEISUNG }].concat(namen);
+      },
+      test: (r, w) => w === OHNE_ZUWEISUNG
+        ? !(r.__assignees || []).length
+        : (r.__assignees || []).includes(w) },
 
     // Mehrfachauswahl mit ODER: eine Aufgabe passt, sobald sie EINES der
     // angehakten Labels traegt.
@@ -1846,11 +2035,16 @@ function viewTasks() {
   const v = $("#view");
   v.innerHTML = "";
   v.appendChild(el("div", { class: "page-head" },
+    "<div class='head-left'>" +
     "<div><h1>Projektaufgaben</h1><div class='sub'>" +
     store.tasks.length.toLocaleString("de-DE") + " Aufgaben aus allen Projekten</div></div>" +
+    labelLegende() +
+    "</div>" +
     "<button class='btn' data-role='reload'>Aktualisieren</button>"));
 
   if (lastResultHtml) { v.appendChild(el("div", {}, lastResultHtml)); lastResultHtml = ""; }
+  const zuwHinweis = assigneesNotice();
+  if (zuwHinweis) v.appendChild(zuwHinweis);
 
   const tbl = createTable({
     columns: taskColumns(true, true),
@@ -1860,9 +2054,9 @@ function viewTasks() {
     getId: r => r.msdyn_projecttaskid,
     selectable: true,
     canSelect: istBearbeitbar,
-    searchFields: ["msdyn_subject", "__projectLabel", "__labelText",
+    searchFields: ["msdyn_subject", "__projectLabel", "__labelText", "__assigneeText",
                    r => r["_msdyn_projectbucket_value" + FV]],
-    searchPlaceholder: "Aufgabe, Projekt, Bucket oder Label suchen …",
+    searchPlaceholder: "Aufgabe, Projekt, Bucket, Label oder Verantwortlichen suchen …",
     defaultSort: "msdyn_subject",
     onEdit: ids => openBulkEdit(ids, () => { tbl.clearSelection(); route(); })
   });
@@ -2154,6 +2348,7 @@ document.addEventListener("click", async ev => {
 $("#edStart").addEventListener("input", validateEdit);
 $("#edEnd").addEventListener("input", validateEdit);
 $("#edPrio").addEventListener("change", validateEdit);
+$("#edEffort").addEventListener("input", validateEdit);
 $("#edLabel").addEventListener("change", validateEdit);
 
 // Auswahlfeld aus PRIO_STUFEN aufbauen, damit die Stufen nur an EINER Stelle
@@ -2197,16 +2392,17 @@ $("#edSave").addEventListener("click", async () => {
   const endDate   = $("#edEnd").value || null;
   const prio      = $("#edPrio").value || null;
   const labelText = $("#edLabel").value || null;
+  const effort    = $("#edEffort").value !== "" ? $("#edEffort").value : null;
   $("#editDlg").close();
 
-  buildConfirm(startDate, endDate, prio, labelText);
+  buildConfirm(startDate, endDate, prio, labelText, effort);
   if (!(await askConfirm())) return;
 
   const before = pendingTasks.map(t => ({ id: t.msdyn_projecttaskid }));
   downloadBackupCsv();
 
   try {
-    const run = await writeBulk(startDate, endDate, prio, labelText);
+    const run = await writeBulk(startDate, endDate, prio, labelText, effort);
     overlay(true, "Daten werden neu geladen …");
     await loadData();
     lastResultHtml = reportResult(run, before);
