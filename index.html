@@ -111,6 +111,10 @@ tbody tr.gesperrt:hover{background:transparent}
 .lb-forecast{background:#6d28d9;color:#fff}
 .lb-other{background:#e8ebef;color:#4b5563}
 td.labels{white-space:normal;max-width:230px}
+/* Verantwortlich: ein Name je Zeile, der Name selbst bricht nicht um - die
+   Spalte wird nur so breit wie der laengste einzelne Name. */
+td.assignees{white-space:normal;line-height:1.45}
+td.assignees span{display:block;white-space:nowrap}
 
 /* Legende im Kopf von 'Projektaufgaben': Titel und Legende links nebeneinander,
    der Knopf 'Aktualisieren' bleibt rechts. */
@@ -663,6 +667,13 @@ const TASK_SELECT = "msdyn_projecttaskid,msdyn_subject,_msdyn_projectbucket_valu
 // Scheduling-Engine schreibgeschuetzt (E_NOTEDITABLE). Nachgewiesen am 12.08.2026.
 const istBearbeitbar = t => t.msdyn_ismanual !== true;
 
+// Bucket-Name fuer Anzeige, Sortierung, Suche und Filter. Bei SAMMELAUFGABEN leer:
+// msdyn_projectbucket ist in Dataverse Pflicht, deshalb tragen auch sie einen -
+// nach dem Kopieren aus der Vorlage meist den ERSTEN Bucket des Projekts
+// (ANLEITUNG 13.2: 97 von 223 Faellen). Project for the Web zeigt ihn dort nicht
+// an; der Wert ist fachlich bedeutungslos und wuerde nur in die Irre fuehren.
+const bucketName = t => t.msdyn_summary === true ? "" : (t["_msdyn_projectbucket_value" + FV] || "");
+
 // Farbschema laut Vorgabe. Alle uebrigen Labels erscheinen neutral grau,
 // damit nichts verborgen bleibt.
 const LABEL_KLASSEN = { fix: "lb-fix", base: "lb-base", plan: "lb-plan",
@@ -1149,8 +1160,8 @@ function taskColumns(withProject, withLabels) {
     } });
   cols.push(
     { key: "bucket", label: "Bucket",
-      sortValue: r => (r["_msdyn_projectbucket_value" + FV] || "").toLowerCase(),
-      render: r => esc(r["_msdyn_projectbucket_value" + FV] || "") },
+      sortValue: r => bucketName(r).toLowerCase(),
+      render: r => esc(bucketName(r)) },
     { key: "msdyn_scheduledstart", label: "Startdatum",
       sortValue: r => r.msdyn_scheduledstart || "",
       render: r => esc(fmtDate(r, "msdyn_scheduledstart")) },
@@ -1168,11 +1179,13 @@ function taskColumns(withProject, withLabels) {
     { key: "msdyn_effort", label: "Aufwand", cls: "num",
       sortValue: r => (r.msdyn_effort === null || r.msdyn_effort === undefined ? "" : Number(r.msdyn_effort)),
       render: r => esc(fmtEffort(r.msdyn_effort)) },
-    // Zugewiesene Ressourcen, kommagetrennt - keine Chips, damit die Spalte bei
-    // mehreren Personen nicht ausufert (so entschieden).
-    { key: "assignees", label: "Verantwortlich",
+    // Zugewiesene Ressourcen, ein Name je Zeile (so entschieden am 22.09.2026):
+    // In einer Zeile wurde die Spalte so breit wie die laengste Namensliste und
+    // draengte die Labels aus dem sichtbaren Bereich. Jeder Name bleibt fuer sich
+    // ohne Umbruch (.assignees span), alle Namen sind immer sichtbar.
+    { key: "assignees", label: "Verantwortlich", cls: "assignees",
       sortValue: r => (r.__assigneeText || "").toLowerCase(),
-      render: r => esc(r.__assigneeText || "") }
+      render: r => (r.__assignees || []).map(n => "<span>" + esc(n) + "</span>").join("") }
   );
   if (withLabels) cols.push({ key: "labels", label: "Labels", cls: "labels",
     sortValue: r => (r.__labels || []).join(", ").toLowerCase(),
@@ -1936,7 +1949,7 @@ function viewProjectDetail(projectId, tab) {
     getId: r => r.msdyn_projecttaskid,
     selectable: true,
     canSelect: istBearbeitbar,
-    searchFields: ["msdyn_subject", "__assigneeText", r => r["_msdyn_projectbucket_value" + FV]],
+    searchFields: ["msdyn_subject", "__assigneeText", bucketName],
     searchPlaceholder: "Aufgabe, Bucket oder Verantwortlichen suchen …",
     defaultSort: "msdyn_scheduledstart",
     emptyText: "Dieses Projekt hat keine Aufgaben.",
@@ -1973,8 +1986,8 @@ function taskFilters() {
       test: (r, w) => (r.__projectLabel || "") === w },
 
     { key: "bucket", label: "Bucket", type: "select",
-      optionen: rows => liste(rows, r => r["_msdyn_projectbucket_value" + FV]),
-      test: (r, w) => (r["_msdyn_projectbucket_value" + FV] || "") === w },
+      optionen: rows => liste(rows, bucketName),
+      test: (r, w) => bucketName(r) === w },
 
     // Einzelauswahl (so entschieden): "Was hat Person X auf dem Tisch?" Eine
     // Aufgabe passt, wenn die Person unter ihren Zuweisungen ist. Die feste
@@ -2054,8 +2067,7 @@ function viewTasks() {
     getId: r => r.msdyn_projecttaskid,
     selectable: true,
     canSelect: istBearbeitbar,
-    searchFields: ["msdyn_subject", "__projectLabel", "__labelText", "__assigneeText",
-                   r => r["_msdyn_projectbucket_value" + FV]],
+    searchFields: ["msdyn_subject", "__projectLabel", "__labelText", "__assigneeText", bucketName],
     searchPlaceholder: "Aufgabe, Projekt, Bucket, Label oder Verantwortlichen suchen …",
     defaultSort: "msdyn_subject",
     onEdit: ids => openBulkEdit(ids, () => { tbl.clearSelection(); route(); })
