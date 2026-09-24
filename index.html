@@ -217,10 +217,12 @@ dialog::backdrop{background:rgba(16,24,40,.45)}
 .rm-today-tag{position:absolute;top:20px;transform:translateX(-50%);background:var(--danger);color:#fff;
   font-size:10px;font-weight:700;line-height:14px;padding:0 6px;border-radius:7px;text-transform:none}
 .rm-row{display:flex;position:relative;z-index:1;border-bottom:1px solid var(--line)}
-.rm-row:nth-child(even){background:rgba(16,24,40,.03)}
+/* Zeilen abwechselnd weiss/grau - deutlich, weil die Farbe der Elemente seit
+   24.09.2026 das Label zeigt und nicht mehr die Zeile voneinander abgrenzt. */
+.rm-row:nth-child(even){background:#eceff3}
 .rm-name{flex:0 0 250px;position:sticky;left:0;z-index:3;background:var(--panel);
   border-right:1px solid var(--line);padding:10px 14px;font-weight:600;font-size:13px;line-height:1.35}
-.rm-row:nth-child(even) .rm-name{background:#f7f8fa}
+.rm-row:nth-child(even) .rm-name{background:#eceff3}
 .rm-name a{color:var(--text);text-decoration:none;display:block;overflow-wrap:anywhere}
 .rm-name a:hover{color:var(--accent)}
 .rm-name .sub{font-weight:400;margin-top:2px;font-size:12px}
@@ -230,6 +232,9 @@ dialog::backdrop{background:rgba(16,24,40,.45)}
   text-decoration:none;box-shadow:0 1px 1px rgba(0,0,0,.15)}
 .rm-bar:hover{filter:brightness(1.1)}
 .rm-bar.done{opacity:.5;text-decoration:line-through}
+/* Rueckfall-Balken (alle Blattaufgaben statt LP-Phasen): schraffiert, damit man
+   auf einen Blick sieht, dass hier keine Phasenstruktur dahintersteht. */
+.rm-bar.alle{background-image:repeating-linear-gradient(135deg,rgba(255,255,255,.28) 0 6px,transparent 6px 12px)}
 .rm-ms{position:absolute;display:flex;align-items:center;gap:6px;height:22px;text-decoration:none;
   font-size:12px;white-space:nowrap}
 .rm-ms .dot{width:14px;height:14px;border-radius:50%;flex:0 0 14px;border:2px solid #fff;
@@ -237,6 +242,11 @@ dialog::backdrop{background:rgba(16,24,40,.45)}
 .rm-ms .lbl{max-width:200px;overflow:hidden;text-overflow:ellipsis;font-weight:500}
 .rm-ms.done .lbl{opacity:.55;text-decoration:line-through}
 .rm-ms:hover .lbl{text-decoration:underline}
+.rm-person{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--muted)}
+.rm-person select{padding:7px 9px;border:1px solid var(--line-strong);border-radius:6px;background:#fff;
+  font:inherit;color:var(--text);max-width:260px}
+.rm-person select:disabled{color:var(--muted);background:#f7f8fa}
+.rm-person select:focus{outline:2px solid var(--accent-soft);border-color:var(--accent)}
 .rm-zoom{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--muted)}
 .rm-zoom input{width:150px;accent-color:var(--accent);margin:0}
 
@@ -2090,10 +2100,28 @@ function lpCodes(subject) {
   return out;
 }
 
-// Zwoelf kraeftige, gut unterscheidbare Farben - zyklisch nach Zeilenposition.
-// Es geht um die Abgrenzung zur Nachbarzeile, nicht um Wiedererkennung.
-const RM_FARBEN = ["#1d4ed8", "#c2410c", "#047857", "#7e22ce", "#b91c1c", "#0e7490",
-                   "#a16207", "#be185d", "#4d7c0f", "#6d28d9", "#0369a1", "#475569"];
+// Farbe eines Roadmap-Elements = Farbe seines Labels (so entschieden am 24.09.2026;
+// vorher eine Rotationsfarbe je Zeile). Dieselben Werte wie die Chips .lb-* im CSS.
+// fg: Schriftfarbe auf dem Balken - auf Gelb muss sie dunkel sein.
+const LABEL_FARBEN = {
+  fix:      { bg: "#15803d", fg: "#fff" },
+  base:     { bg: "#facc15", fg: "#422006" },
+  plan:     { bg: "#1d4ed8", fg: "#fff" },
+  forecast: { bg: "#6d28d9", fg: "#fff" },
+  exclude:  { bg: "#7f1d1d", fg: "#fff" }
+};
+// Ohne Farbschema-Label: neutrales Grau - Farbe bedeutet ab jetzt genau eines.
+const OHNE_LABEL_FARBE = { bg: "#94a3b8", fg: "#fff" };
+// Traegt eine Aufgabe mehrere Labels, gewinnt das verbindlichste - in der
+// Reihenfolge der Legende (Fix > Base > Plan > Forecast > Exclude).
+function labelFarbe(t) {
+  const lower = t.__labelsLower || [];
+  for (const z of LABEL_LEGENDE) {
+    const k = z.label.toLowerCase();
+    if (lower.includes(k)) return LABEL_FARBEN[k];
+  }
+  return OHNE_LABEL_FARBE;
+}
 const RM_NAMEW = 250;        // Breite der Projektspalte (auch im CSS: .rm-corner, .rm-name)
 const RM_SPUR  = 30;         // Hoehe einer Spur (Balken oder Meilenstein)
 const RM_PAD   = 8;          // Abstand oben/unten in der Zeile
@@ -2103,7 +2131,7 @@ const MONATE   = ["Jan.", "Feb.", "März", "Apr.", "Mai", "Juni",
 
 // Ueberlebt den Wechsel zwischen den Ansichten, damit Zoom und Suche beim
 // Zurueckkommen noch so stehen, wie man sie verlassen hat.
-const rmState = { zoom: 110, q: "" };
+const rmState = { zoom: 110, q: "", person: "" };   // person: Name aus dem Filter, "" = alle
 
 const tagAus = v => { const d = isoDay(v); return d ? new Date(d + "T00:00:00") : null; };
 const einer  = (n, eins, viele) => n.toLocaleString("de-DE") + " " + (n === 1 ? eins : viele);
@@ -2121,10 +2149,46 @@ const einer  = (n, eins, viele) => n.toLocaleString("de-DE") + " " + (n === 1 ? 
   Aufgabe beides, erscheint nur der Kreis - ein Balken mit Dauer 0 waere
   ohnehin unsichtbar.
 
-  Projekte ohne Balken und ohne Meilenstein fallen weg (so entschieden).
+  Rueckfall (so entschieden am 23.09.2026): Hat ein Projekt KEINEN LP-Balken -
+  weil es keine Sammelaufgaben gibt oder deren Betreff kein Kuerzel traegt -,
+  werden stattdessen ALLE Blattaufgaben (keine Sammelaufgabe, kein Meilenstein)
+  mit Termin als Balken gezeigt. Meilensteine bleiben davon unberuehrt. Solche
+  Zeilen sind als "alle Aufgaben" gekennzeichnet, die Balken schraffiert.
+
+  Erst ein Projekt ohne jede terminierte Aufgabe faellt weg.
+
+  Personenfilter (so entschieden am 24.09.2026), wenn `person` gesetzt ist:
+    - Ein LP-Balken bleibt, wenn die Person am Balken selbst ODER an einer
+      Aufgabe in seinem Teilbaum zugewiesen ist (Zuweisungen haengen meist an
+      Blaettern, die Balken sind Sammelaufgaben).
+    - Ein Meilenstein bleibt, wenn die Person direkt zugewiesen ist.
+    - Blattaufgaben fuer den Rueckfall: nur die der Person. Dadurch zeigt ein
+      Projekt, in dem die Person nur AUSSERHALB der Phasen arbeitet, genau
+      diese Aufgaben statt zu verschwinden.
+    - Projekte ohne einen dieser Faelle fallen weg.
 */
-function roadmapRows() {
+function roadmapRows(person) {
   const byId = new Map(store.tasks.map(t => [t.msdyn_projecttaskid, t]));
+
+  // Direkt zugewiesen?
+  const direkt = t => !person || (t.__assignees || []).includes(person);
+  // Alle Vorfahren der direkt zugewiesenen Aufgaben - ein Balken "hat" die
+  // Person, wenn er selbst in dieser Menge liegt oder direkt zugewiesen ist.
+  const vorfahrenMitPerson = new Set();
+  if (person) {
+    for (const t of store.tasks) {
+      if (!direkt(t)) continue;
+      const gesehen = new Set();
+      let pid = t._msdyn_parenttask_value;
+      while (pid && !gesehen.has(pid)) {
+        gesehen.add(pid);
+        vorfahrenMitPerson.add(pid);
+        const p = byId.get(pid);
+        pid = p ? p._msdyn_parenttask_value : null;
+      }
+    }
+  }
+  const imTeilbaum = t => !person || direkt(t) || vorfahrenMitPerson.has(t.msdyn_projecttaskid);
   const hatVorfahrMitKuerzel = (t, codes) => {
     const gesehen = new Set();       // Schutz vor Zyklen in den Elternbezuegen
     let pid = t._msdyn_parenttask_value;
@@ -2140,21 +2204,27 @@ function roadmapRows() {
 
   const rows = [];
   for (const p of store.projects) {
-    const bars = [], ms = [];
+    let bars = [];
+    const ms = [], blaetter = [];
     for (const t of store.byProject.get(p.msdyn_projectid) || []) {
       const start = tagAus(t.msdyn_scheduledstart);
       if (!start) continue;
       const end = tagAus(t.msdyn_scheduledend) || start;
       const item = { t, start, end: end < start ? start : end, done: Number(t.msdyn_progress) >= 1 };
-      if (t.msdyn_ismilestone === true) { ms.push(item); continue; }
+      if (t.msdyn_ismilestone === true) { if (direkt(t)) ms.push(item); continue; }
+      if (t.msdyn_summary !== true && direkt(t)) blaetter.push(item);
       const codes = lpCodes(t.msdyn_subject);
       if (!codes.size || hatVorfahrMitKuerzel(t, codes)) continue;
-      bars.push(item);
+      if (imTeilbaum(t)) bars.push(item);
     }
+    // Rueckfall: ohne LP-Balken alle Blattaufgaben zeigen (siehe Kopfkommentar).
+    const alleAufgaben = !bars.length && blaetter.length > 0;
+    if (alleAufgaben) bars = blaetter;
     if (!bars.length && !ms.length) continue;
     bars.sort((a, b) => a.start - b.start || a.end - b.end);
     ms.sort((a, b) => a.start - b.start);
-    rows.push({ p, label: store.projectLabel.get(p.msdyn_projectid) || p.msdyn_subject || "", bars, ms });
+    rows.push({ p, label: store.projectLabel.get(p.msdyn_projectid) || p.msdyn_subject || "",
+                bars, ms, alleAufgaben });
   }
   rows.sort((a, b) => a.label.localeCompare(b.label, "de"));
   return rows;
@@ -2163,19 +2233,48 @@ function roadmapRows() {
 function viewRoadmap() {
   const v = $("#view");
   v.innerHTML = "";
-  const alle = roadmapRows();
-  const nBars = alle.reduce((s, r) => s + r.bars.length, 0);
+  // Personenliste aus den geladenen Zuweisungen (so entschieden): nur wer
+  // irgendwo zugewiesen ist, steht zur Wahl. Eine gemerkte Person, die es nach
+  // dem Neuladen nicht mehr gibt, faellt still auf "(alle)" zurueck.
+  const personen = [...new Set([...store.assigneesByTask.values()].flat())]
+    .sort((a, b) => a.localeCompare(b, "de"));
+  if (rmState.person && !personen.includes(rmState.person)) rmState.person = "";
+  const person = rmState.person;
+
+  // gesamtRows: ungefiltert - Basis fuer "ausgeblendet" und "7 von 38".
+  // alle: was tatsaechlich gezeichnet wird (Zeitachse, Zaehler, Zeilen).
+  const gesamtRows = roadmapRows(null);
+  const alle = person ? roadmapRows(person) : gesamtRows;
+  // Phasen nur aus den Zeilen mit echter LP-Struktur zaehlen; die Rueckfall-Zeilen
+  // (alle Blattaufgaben) werden getrennt genannt.
+  const nBars = alle.reduce((s, r) => s + (r.alleAufgaben ? 0 : r.bars.length), 0);
   const nMs   = alle.reduce((s, r) => s + r.ms.length, 0);
-  const ausgeblendet = store.projects.length - alle.length;
+  const nAlle = alle.filter(r => r.alleAufgaben).length;
+  const ausgeblendet = store.projects.length - gesamtRows.length;
 
   v.appendChild(el("div", { class: "page-head" },
+    "<div class='head-left'>" +
     "<div><h1>Roadmap</h1><div class='sub'>" +
     einer(alle.length, "Projekt", "Projekte") + " · " + einer(nBars, "Phase", "Phasen") + " · " +
-    einer(nMs, "Meilenstein", "Meilensteine") + " · Klicken Sie ein Element an, um die Aufgaben des Projekts zu öffnen.</div></div>" +
+    einer(nMs, "Meilenstein", "Meilensteine") +
+    (nAlle ? " · " + einer(nAlle, "Projekt", "Projekte") + " ohne LP-Phasen (" +
+             (person ? "Aufgaben der Person" : "alle Aufgaben") + ", schraffiert)" : "") +
+    (person ? " – Auswahl: <strong>" + esc(person) + "</strong>" : "") +
+    "<br>Farbe = Label der Aufgabe. Klicken Sie ein Element an, um die Aufgaben des Projekts zu öffnen.</div></div>" +
+    labelLegende() +
+    "</div>" +
     "<button class='btn' data-role='reload'>Aktualisieren</button>"));
 
   const panel = el("div", { class: "panel" });
+  // Ohne geladene Zuweisungen (Rechte) ist das Dropdown gesperrt; der gelbe
+  // Hinweis darunter erklaert, warum.
+  const personSperre = !!store.assigneesError || !personen.length;
   panel.appendChild(el("div", { class: "toolbar" },
+    '<label class="rm-person">Person <select id="rmPerson"' + (personSperre ? " disabled" : "") +
+    ' title="' + (personSperre ? "Zuweisungen nicht geladen" : "Nur Projekte und Phasen mit Aufgaben dieser Person") + '">' +
+    '<option value="">(alle)</option>' +
+    personen.map(n => '<option value="' + esc(n) + '"' + (n === person ? " selected" : "") + ">" + esc(n) + "</option>").join("") +
+    "</select></label>" +
     '<div class="search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">' +
     '<circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>' +
     '<input type="search" id="rmQ" placeholder="Projekt suchen …" value="' + esc(rmState.q) + '"></div>' +
@@ -2183,16 +2282,25 @@ function viewRoadmap() {
     '<label class="rm-zoom">Zoom <input type="range" id="rmZoom" min="40" max="260" step="10" value="' +
     rmState.zoom + '"></label>' +
     '<span class="count" id="rmCount"></span>'));
+  const zuwHinweis = assigneesNotice();
+  if (zuwHinweis) { zuwHinweis.className = "hinweis"; zuwHinweis.removeAttribute("style"); panel.appendChild(zuwHinweis); }
   if (ausgeblendet > 0)
     panel.appendChild(el("div", { class: "hinweis" },
-      einer(ausgeblendet, "Projekt", "Projekte") + " ohne LP-Phasen und ohne Meilensteine " +
+      einer(ausgeblendet, "Projekt", "Projekte") + " ohne eine einzige terminierte Aufgabe " +
       (ausgeblendet === 1 ? "ist" : "sind") + " ausgeblendet."));
   const scroller = el("div", { class: "rm" });
   panel.appendChild(scroller);
   v.appendChild(panel);
 
+  // Die Zeitachse haengt von der Auswahl ab, deshalb wird die Ansicht neu
+  // aufgebaut statt nur neu gezeichnet. Vor dem fruehen Ausstieg registrieren,
+  // damit man aus einem leeren Ergebnis wieder herauskommt.
+  $("#rmPerson").addEventListener("change", ev => { rmState.person = ev.target.value; viewRoadmap(); });
+
   if (!alle.length) {
-    scroller.innerHTML = '<div class="empty">Keine Aufgabe trägt ein LP-Kürzel oder ein Meilenstein-Kennzeichen.</div>';
+    scroller.innerHTML = '<div class="empty">' + (person
+      ? "Keine terminierte Aufgabe von " + esc(person) + "."
+      : "Kein Projekt hat eine terminierte Aufgabe.") + "</div>";
     return;
   }
 
@@ -2216,7 +2324,10 @@ function viewRoadmap() {
   const tip = it => it.t.msdyn_subject + "\n" +
     (it.t.msdyn_ismilestone ? de(isoDay(it.t.msdyn_scheduledstart))
                             : de(isoDay(it.t.msdyn_scheduledstart)) + " – " + de(isoDay(it.t.msdyn_scheduledend))) +
-    (it.t.msdyn_progress != null ? "\nFortschritt: " + fmtProgress(it.t.msdyn_progress) : "");
+    (it.t.msdyn_progress != null ? "\nFortschritt: " + fmtProgress(it.t.msdyn_progress) : "") +
+    // ALLE Labels nennen - bei mehreren bestimmt nur das verbindlichste die Farbe,
+    // der Widerspruch soll aber sichtbar bleiben.
+    "\nLabel: " + ((it.t.__labels || []).join(", ") || "(ohne)");
 
   // Greedy: jedes Element in die erste Spur, deren rechte Kante frei ist.
   function spuren(items, breite, x) {
@@ -2231,10 +2342,12 @@ function viewRoadmap() {
   }
 
   function draw() {
+    // Suche und Personenfilter wirken gemeinsam; Bezugsgroesse ist immer die
+    // ungefilterte Roadmap ("7 von 38 Projekten").
     const rows = alle.filter(r => !rmState.q || r.label.toLowerCase().includes(rmState.q));
-    $("#rmCount").textContent = rows.length === alle.length
+    $("#rmCount").textContent = rows.length === gesamtRows.length
       ? einer(rows.length, "Projekt", "Projekte")
-      : rows.length + " von " + einer(alle.length, "Projekt", "Projekten");
+      : rows.length + " von " + einer(gesamtRows.length, "Projekt", "Projekten");
 
     ppd = rmState.zoom / 30.4375;
     const x = d => Math.round((d - achseStart) / TAG_MS * ppd);
@@ -2262,8 +2375,7 @@ function viewRoadmap() {
 
     if (!rows.length) inner.appendChild(el("div", { class: "empty" }, "Kein Projekt passt zur Suche."));
 
-    rows.forEach((r, i) => {
-      const farbe = RM_FARBEN[i % RM_FARBEN.length];
+    rows.forEach(r => {
       const href  = "#/projekte/" + r.p.msdyn_projectid + "/aufgaben";
       // Meilensteine oben (Kreis + Text), darunter die Balken.
       const msSpur  = spuren(r.ms, it => 20 + Math.min(200, 6.5 * String(it.t.msdyn_subject || "").length), x);
@@ -2274,22 +2386,30 @@ function viewRoadmap() {
 
       let lane = "";
       r.ms.forEach((it, j) => {
+        const f = labelFarbe(it.t);
+        // Der Text neben dem Kreis steht auf dem Zeilenhintergrund, nicht auf
+        // der Farbe - Gelb waere dort unleserlich, deshalb der dunkle Chip-Ton.
+        const textFarbe = f.fg === "#fff" ? f.bg : f.fg;
         lane += '<a class="rm-ms' + (it.done ? " done" : "") + '" href="' + href + '" style="left:' +
                 (x(it.start) - 7) + "px;top:" + (RM_PAD + msSpur[j] * RM_SPUR + 4) + 'px" title="' + esc(tip(it)) + '">' +
-                '<span class="dot" style="background:' + farbe + '"></span>' +
-                '<span class="lbl" style="color:' + farbe + '">' + esc(it.t.msdyn_subject) + "</span></a>";
+                '<span class="dot" style="background:' + f.bg + '"></span>' +
+                '<span class="lbl" style="color:' + textFarbe + '">' + esc(it.t.msdyn_subject) + "</span></a>";
       });
       r.bars.forEach((it, j) => {
         const w = Math.max(6, x(it.end) + ppd - x(it.start));
-        lane += '<a class="rm-bar' + (it.done ? " done" : "") + '" href="' + href + '" style="left:' + x(it.start) +
+        const f = labelFarbe(it.t);
+        lane += '<a class="rm-bar' + (it.done ? " done" : "") + (r.alleAufgaben ? " alle" : "") +
+                '" href="' + href + '" style="left:' + x(it.start) +
                 "px;width:" + Math.round(w) + "px;top:" + (RM_PAD + (nMsSpuren + barSpur[j]) * RM_SPUR + 4) +
-                "px;background:" + farbe + '" title="' + esc(tip(it)) + '">' +
+                "px;background:" + f.bg + ";color:" + f.fg + '" title="' + esc(tip(it)) + '">' +
                 (w >= 40 ? esc(it.t.msdyn_subject) : "") + "</a>";
       });
 
       inner.appendChild(el("div", { class: "rm-row", style: "min-height:" + h + "px" },
         '<div class="rm-name"><a href="' + href + '">' + esc(r.label) + "</a>" +
-        '<div class="sub">' + einer(r.bars.length, "Phase", "Phasen") + " · " +
+        '<div class="sub">' +
+        (r.alleAufgaben ? einer(r.bars.length, "Aufgabe", "Aufgaben") + " (keine LP-Phasen)"
+                        : einer(r.bars.length, "Phase", "Phasen")) + " · " +
         einer(r.ms.length, "Meilenstein", "Meilensteine") + "</div></div>" +
         '<div class="rm-lane" style="width:' + gesamt + "px;height:" + h + 'px">' + lane + "</div>"));
     });
