@@ -2112,6 +2112,17 @@ const LABEL_FARBEN = {
 };
 // Ohne Farbschema-Label: neutrales Grau - Farbe bedeutet ab jetzt genau eines.
 const OHNE_LABEL_FARBE = { bg: "#94a3b8", fg: "#fff" };
+// Ausnahme von "Farbe = Label" (so gewuenscht am 24.09.2026): Im Planner
+// "RP-Abwesenheiten" sind Feiertage dunkelrot. Feiertag = Betreff enthaelt
+// "Feiertag-ID". Nur in diesem Projekt, damit ein Betreff anderswo nichts umfaerbt.
+// Der Ton liegt bewusst etwas heller als Exclude (#7f1d1d), der Tooltip sagt "Feiertag".
+const FEIERTAG = {
+  projektId: "02018565-1b52-471a-8170-1458244a036d",   // RP-Abwesenheiten
+  muster: /Feiertag-ID/i,
+  farbe: { bg: "#991b1b", fg: "#fff" }
+};
+const istFeiertag = (projektId, t) =>
+  projektId === FEIERTAG.projektId && FEIERTAG.muster.test(String(t.msdyn_subject || ""));
 // Traegt eine Aufgabe mehrere Labels, gewinnt das verbindlichste - in der
 // Reihenfolge der Legende (Fix > Base > Plan > Forecast > Exclude).
 function labelFarbe(t) {
@@ -2131,7 +2142,37 @@ const MONATE   = ["Jan.", "Feb.", "März", "Apr.", "Mai", "Juni",
 
 // Ueberlebt den Wechsel zwischen den Ansichten, damit Zoom und Suche beim
 // Zurueckkommen noch so stehen, wie man sie verlassen hat.
-const rmState = { zoom: 110, q: "", person: "" };   // person: Name aus dem Filter, "" = alle
+// person: Name aus dem Filter, label: Schema-Label oder RM_OHNE_LABEL; "" = alle
+const rmState = { zoom: 110, q: "", person: "", label: "" };
+const RM_OHNE_LABEL = "(ohne Label)";
+
+// Personen, die im Filter der Roadmap NICHT zur Wahl stehen (so gewuenscht am
+// 25.09.2026). Verglichen wird unempfindlich gegen Gross/Klein und Umlaut-
+// Schreibweise (ue = ü), weil der Dataverse-Name beides tragen kann.
+const RM_PERSONEN_AUSGESCHLOSSEN = ["Ardian Kovani", "Dilan Sevinc", "Olaf Greismuehlen"];
+const normName = s => String(s || "").toLowerCase()
+  .replace(/ä/g, "ae").replace(/ö/g, "oe").replace(/ü/g, "ue").replace(/ß/g, "ss")
+  .replace(/\s+/g, " ").trim();
+const RM_AUSGESCHLOSSEN_NORM = new Set(RM_PERSONEN_AUSGESCHLOSSEN.map(normName));
+const personErlaubt = name => !RM_AUSGESCHLOSSEN_NORM.has(normName(name));
+
+// Projekte, die in der Roadmap NICHT erscheinen (so gewuenscht am 25.09.2026):
+// Vorlagen, Muster- und Forecast-Plaene. Verglichen wird der Projektname
+// (msdyn_subject) wie bei den Personen unempfindlich gegen Gross/Klein und
+// Umlaute, zusaetzlich gegen doppelte Leerzeichen und die Strichart (– vs. -),
+// weil genau das in den Namen vorkommt ("FWGH  Neversdorf", "Muster-Plan – Kopie").
+const RM_PROJEKTE_AUSGESCHLOSSEN = [
+  "99-000 Forecast FWGH Neversdorf_Terminplan",
+  "99-000 Forecast Musterplan_Terminplan",
+  "Master-Plan_Neu",
+  "Projektrückschau",
+  "Schulungsplan",
+  "Vorlage Muster-Plan – Kopie",
+  "Vorlage Muster-Plan – Kopie – Kopie"
+];
+const normProjekt = s => normName(s).replace(/[–—]/g, "-").replace(/\s*-\s*/g, "-");
+const RM_PROJEKTE_AUSGESCHLOSSEN_NORM = new Set(RM_PROJEKTE_AUSGESCHLOSSEN.map(normProjekt));
+const projektErlaubt = p => !RM_PROJEKTE_AUSGESCHLOSSEN_NORM.has(normProjekt(p.msdyn_subject));
 
 const tagAus = v => { const d = isoDay(v); return d ? new Date(d + "T00:00:00") : null; };
 const einer  = (n, eins, viele) => n.toLocaleString("de-DE") + " " + (n === 1 ? eins : viele);
@@ -2166,9 +2207,21 @@ const einer  = (n, eins, viele) => n.toLocaleString("de-DE") + " " + (n === 1 ? 
       Projekt, in dem die Person nur AUSSERHALB der Phasen arbeitet, genau
       diese Aufgaben statt zu verschwinden.
     - Projekte ohne einen dieser Faelle fallen weg.
+
+  Labelfilter (so entschieden am 25.09.2026), wenn `label` gesetzt ist:
+    - Gemessen an den EIGENEN Labels der Aufgabe - auch beim Phasenbalken, damit
+      Filter und Farbe dasselbe sagen. "Traegt das Label" reicht: eine Aufgabe
+      mit Plan UND Fix erscheint unter beiden.
+    - RM_OHNE_LABEL trifft genau die grauen Elemente (kein Schema-Label).
+    - Person und Label wirken als UND am selben Element.
 */
-function roadmapRows(person) {
+function roadmapRows(person, label) {
   const byId = new Map(store.tasks.map(t => [t.msdyn_projecttaskid, t]));
+
+  const labelKlein = (label || "").toLowerCase();
+  const labelOk = t => !label
+    || (label === RM_OHNE_LABEL ? labelFarbe(t) === OHNE_LABEL_FARBE
+                                : (t.__labelsLower || []).includes(labelKlein));
 
   // Direkt zugewiesen?
   const direkt = t => !person || (t.__assignees || []).includes(person);
@@ -2204,6 +2257,7 @@ function roadmapRows(person) {
 
   const rows = [];
   for (const p of store.projects) {
+    if (!projektErlaubt(p)) continue;          // Ausschlussliste, siehe RM_PROJEKTE_AUSGESCHLOSSEN
     let bars = [];
     const ms = [], blaetter = [];
     for (const t of store.byProject.get(p.msdyn_projectid) || []) {
@@ -2211,11 +2265,11 @@ function roadmapRows(person) {
       if (!start) continue;
       const end = tagAus(t.msdyn_scheduledend) || start;
       const item = { t, start, end: end < start ? start : end, done: Number(t.msdyn_progress) >= 1 };
-      if (t.msdyn_ismilestone === true) { if (direkt(t)) ms.push(item); continue; }
-      if (t.msdyn_summary !== true && direkt(t)) blaetter.push(item);
+      if (t.msdyn_ismilestone === true) { if (direkt(t) && labelOk(t)) ms.push(item); continue; }
+      if (t.msdyn_summary !== true && direkt(t) && labelOk(t)) blaetter.push(item);
       const codes = lpCodes(t.msdyn_subject);
       if (!codes.size || hatVorfahrMitKuerzel(t, codes)) continue;
-      if (imTeilbaum(t)) bars.push(item);
+      if (imTeilbaum(t) && labelOk(t)) bars.push(item);
     }
     // Rueckfall: ohne LP-Balken alle Blattaufgaben zeigen (siehe Kopfkommentar).
     const alleAufgaben = !bars.length && blaetter.length > 0;
@@ -2237,20 +2291,28 @@ function viewRoadmap() {
   // irgendwo zugewiesen ist, steht zur Wahl. Eine gemerkte Person, die es nach
   // dem Neuladen nicht mehr gibt, faellt still auf "(alle)" zurueck.
   const personen = [...new Set([...store.assigneesByTask.values()].flat())]
+    .filter(personErlaubt)
     .sort((a, b) => a.localeCompare(b, "de"));
   if (rmState.person && !personen.includes(rmState.person)) rmState.person = "";
   const person = rmState.person;
+  // Labelfilter: die fuenf Schema-Labels in Legendenreihenfolge plus "(ohne Label)".
+  const labelOptionen = LABEL_LEGENDE.map(z => z.label).concat([RM_OHNE_LABEL]);
+  if (rmState.label && !labelOptionen.includes(rmState.label)) rmState.label = "";
+  const label = rmState.label;
+  const auswahl = [person, label].filter(Boolean).map(esc).join(" · ");
 
   // gesamtRows: ungefiltert - Basis fuer "ausgeblendet" und "7 von 38".
   // alle: was tatsaechlich gezeichnet wird (Zeitachse, Zaehler, Zeilen).
-  const gesamtRows = roadmapRows(null);
-  const alle = person ? roadmapRows(person) : gesamtRows;
+  const gesamtRows = roadmapRows(null, null);
+  const alle = (person || label) ? roadmapRows(person, label) : gesamtRows;
   // Phasen nur aus den Zeilen mit echter LP-Struktur zaehlen; die Rueckfall-Zeilen
   // (alle Blattaufgaben) werden getrennt genannt.
   const nBars = alle.reduce((s, r) => s + (r.alleAufgaben ? 0 : r.bars.length), 0);
   const nMs   = alle.reduce((s, r) => s + r.ms.length, 0);
   const nAlle = alle.filter(r => r.alleAufgaben).length;
-  const ausgeblendet = store.projects.length - gesamtRows.length;
+  // Ausgeschlossene Projekte zaehlen nicht als "ohne terminierte Aufgabe".
+  const ausgeschlossen = store.projects.filter(p => !projektErlaubt(p)).length;
+  const ausgeblendet = store.projects.length - ausgeschlossen - gesamtRows.length;
 
   v.appendChild(el("div", { class: "page-head" },
     "<div class='head-left'>" +
@@ -2258,8 +2320,8 @@ function viewRoadmap() {
     einer(alle.length, "Projekt", "Projekte") + " · " + einer(nBars, "Phase", "Phasen") + " · " +
     einer(nMs, "Meilenstein", "Meilensteine") +
     (nAlle ? " · " + einer(nAlle, "Projekt", "Projekte") + " ohne LP-Phasen (" +
-             (person ? "Aufgaben der Person" : "alle Aufgaben") + ", schraffiert)" : "") +
-    (person ? " – Auswahl: <strong>" + esc(person) + "</strong>" : "") +
+             (auswahl ? "passende Aufgaben" : "alle Aufgaben") + ", schraffiert)" : "") +
+    (auswahl ? " – Auswahl: <strong>" + auswahl + "</strong>" : "") +
     "<br>Farbe = Label der Aufgabe. Klicken Sie ein Element an, um die Aufgaben des Projekts zu öffnen.</div></div>" +
     labelLegende() +
     "</div>" +
@@ -2275,6 +2337,10 @@ function viewRoadmap() {
     '<option value="">(alle)</option>' +
     personen.map(n => '<option value="' + esc(n) + '"' + (n === person ? " selected" : "") + ">" + esc(n) + "</option>").join("") +
     "</select></label>" +
+    '<label class="rm-person">Label <select id="rmLabel" title="Nur Balken und Meilensteine, die dieses Label tragen">' +
+    '<option value="">(alle)</option>' +
+    labelOptionen.map(l => '<option value="' + esc(l) + '"' + (l === label ? " selected" : "") + ">" + esc(l) + "</option>").join("") +
+    "</select></label>" +
     '<div class="search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">' +
     '<circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>' +
     '<input type="search" id="rmQ" placeholder="Projekt suchen …" value="' + esc(rmState.q) + '"></div>' +
@@ -2284,10 +2350,15 @@ function viewRoadmap() {
     '<span class="count" id="rmCount"></span>'));
   const zuwHinweis = assigneesNotice();
   if (zuwHinweis) { zuwHinweis.className = "hinweis"; zuwHinweis.removeAttribute("style"); panel.appendChild(zuwHinweis); }
-  if (ausgeblendet > 0)
+  if (ausgeblendet > 0 || ausgeschlossen > 0)
     panel.appendChild(el("div", { class: "hinweis" },
-      einer(ausgeblendet, "Projekt", "Projekte") + " ohne eine einzige terminierte Aufgabe " +
-      (ausgeblendet === 1 ? "ist" : "sind") + " ausgeblendet."));
+      (ausgeblendet > 0
+        ? einer(ausgeblendet, "Projekt", "Projekte") + " ohne eine einzige terminierte Aufgabe " +
+          (ausgeblendet === 1 ? "ist" : "sind") + " ausgeblendet." : "") +
+      (ausgeblendet > 0 && ausgeschlossen > 0 ? " " : "") +
+      (ausgeschlossen > 0
+        ? einer(ausgeschlossen, "Projekt", "Projekte") + " (Vorlagen, Muster- und Forecast-Pläne) " +
+          (ausgeschlossen === 1 ? "ist" : "sind") + " laut Ausschlussliste ausgeblendet." : "")));
   const scroller = el("div", { class: "rm" });
   panel.appendChild(scroller);
   v.appendChild(panel);
@@ -2296,10 +2367,13 @@ function viewRoadmap() {
   // aufgebaut statt nur neu gezeichnet. Vor dem fruehen Ausstieg registrieren,
   // damit man aus einem leeren Ergebnis wieder herauskommt.
   $("#rmPerson").addEventListener("change", ev => { rmState.person = ev.target.value; viewRoadmap(); });
+  $("#rmLabel").addEventListener("change", ev => { rmState.label = ev.target.value; viewRoadmap(); });
 
   if (!alle.length) {
-    scroller.innerHTML = '<div class="empty">' + (person
-      ? "Keine terminierte Aufgabe von " + esc(person) + "."
+    scroller.innerHTML = '<div class="empty">' + (auswahl
+      ? "Keine terminierte Aufgabe" +
+        (label ? (label === RM_OHNE_LABEL ? " ohne Label" : " mit Label " + esc(label)) : "") +
+        (person ? " von " + esc(person) : "") + "."
       : "Kein Projekt hat eine terminierte Aufgabe.") + "</div>";
     return;
   }
@@ -2321,13 +2395,14 @@ function viewRoadmap() {
 
   let ppd = 0, xHeute = 0;        // Pixel je Tag und Heute-Position der letzten Zeichnung
 
-  const tip = it => it.t.msdyn_subject + "\n" +
+  const tip = (it, feiertag) => it.t.msdyn_subject + "\n" +
     (it.t.msdyn_ismilestone ? de(isoDay(it.t.msdyn_scheduledstart))
                             : de(isoDay(it.t.msdyn_scheduledstart)) + " – " + de(isoDay(it.t.msdyn_scheduledend))) +
     (it.t.msdyn_progress != null ? "\nFortschritt: " + fmtProgress(it.t.msdyn_progress) : "") +
     // ALLE Labels nennen - bei mehreren bestimmt nur das verbindlichste die Farbe,
     // der Widerspruch soll aber sichtbar bleiben.
-    "\nLabel: " + ((it.t.__labels || []).join(", ") || "(ohne)");
+    "\nLabel: " + ((it.t.__labels || []).join(", ") || "(ohne)") +
+    (feiertag ? "\nFeiertag (dunkelrot, unabhängig vom Label)" : "");
 
   // Greedy: jedes Element in die erste Spur, deren rechte Kante frei ist.
   function spuren(items, breite, x) {
@@ -2386,22 +2461,24 @@ function viewRoadmap() {
 
       let lane = "";
       r.ms.forEach((it, j) => {
-        const f = labelFarbe(it.t);
+        const feiertag = istFeiertag(r.p.msdyn_projectid, it.t);
+        const f = feiertag ? FEIERTAG.farbe : labelFarbe(it.t);
         // Der Text neben dem Kreis steht auf dem Zeilenhintergrund, nicht auf
         // der Farbe - Gelb waere dort unleserlich, deshalb der dunkle Chip-Ton.
         const textFarbe = f.fg === "#fff" ? f.bg : f.fg;
         lane += '<a class="rm-ms' + (it.done ? " done" : "") + '" href="' + href + '" style="left:' +
-                (x(it.start) - 7) + "px;top:" + (RM_PAD + msSpur[j] * RM_SPUR + 4) + 'px" title="' + esc(tip(it)) + '">' +
+                (x(it.start) - 7) + "px;top:" + (RM_PAD + msSpur[j] * RM_SPUR + 4) + 'px" title="' + esc(tip(it, feiertag)) + '">' +
                 '<span class="dot" style="background:' + f.bg + '"></span>' +
                 '<span class="lbl" style="color:' + textFarbe + '">' + esc(it.t.msdyn_subject) + "</span></a>";
       });
       r.bars.forEach((it, j) => {
         const w = Math.max(6, x(it.end) + ppd - x(it.start));
-        const f = labelFarbe(it.t);
+        const feiertag = istFeiertag(r.p.msdyn_projectid, it.t);
+        const f = feiertag ? FEIERTAG.farbe : labelFarbe(it.t);
         lane += '<a class="rm-bar' + (it.done ? " done" : "") + (r.alleAufgaben ? " alle" : "") +
                 '" href="' + href + '" style="left:' + x(it.start) +
                 "px;width:" + Math.round(w) + "px;top:" + (RM_PAD + (nMsSpuren + barSpur[j]) * RM_SPUR + 4) +
-                "px;background:" + f.bg + ";color:" + f.fg + '" title="' + esc(tip(it)) + '">' +
+                "px;background:" + f.bg + ";color:" + f.fg + '" title="' + esc(tip(it, feiertag)) + '">' +
                 (w >= 40 ? esc(it.t.msdyn_subject) : "") + "</a>";
       });
 
