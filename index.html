@@ -110,6 +110,7 @@ tbody tr.gesperrt:hover{background:transparent}
 .lb-exclude{background:#7f1d1d;color:#fff}
 .lb-forecast{background:#6d28d9;color:#fff}
 .lb-other{background:#e8ebef;color:#4b5563}
+.lb-ohne{background:#94a3b8;color:#fff}   /* = OHNE_LABEL_FARBE der Roadmap-Balken */
 td.labels{white-space:normal;max-width:230px}
 /* Verantwortlich: ein Name je Zeile, der Name selbst bricht nicht um - die
    Spalte wird nur so breit wie der laengste einzelne Name. */
@@ -352,11 +353,8 @@ dialog::backdrop{background:rgba(16,24,40,.45)}
       <div class="dlg-grid">
         <div class="field span2"><label for="cpTitle">Titel</label>
           <input type="text" id="cpTitle" autocomplete="off" placeholder="25-621 - Neubau Lagerhalle"></div>
-        <div class="field span2"><label for="cpTeam">Team</label>
-          <select id="cpTeam"><option value="">Teams werden geladen &hellip;</option></select></div>
       </div>
-      <div id="createTeamHint" style="margin-top:14px"></div>
-      <div id="createMsg"></div>
+      <div id="createMsg" style="margin-top:14px"></div>
     </div>
     <div class="dlg-foot">
       <button type="button" class="btn" id="cpCancel">Abbrechen</button>
@@ -398,11 +396,6 @@ const CONFIG = {
   // (Feste Dauer), ebenso das Vorlagenprojekt von New-ProjectFromTemplate.ps1.
   neueProjektAufgabenart: 192350000,
 
-  // Rechte, die das gewaehlte Team auf dem neuen Projekt bekommt. Wortgleich zu
-  // -FreigabeRechte in New-ProjectFromTemplate.ps1. DeleteAccess ist bewusst
-  // dabei, ShareAccess und AssignAccess bewusst nicht.
-  freigabeRechte: "ReadAccess,WriteAccess,AppendAccess,AppendToAccess,DeleteAccess",
-
   pageSize:      100,   // Zeilen je Tabellenseite
   maxOpsPerSet:  200,   // Dataverse-Limit: 200 Operationen je OperationSet
   writeParallel: 6,     // gleichzeitige PssUpdate-Aufrufe je Block
@@ -410,11 +403,6 @@ const CONFIG = {
 };
 
 const SCOPES = [CONFIG.environmentUrl + "/user_impersonation"];
-// Graph ist eine EIGENE Ressource: ein Zugriffstoken gilt immer nur fuer genau
-// eine, Dataverse und Graph lassen sich nicht in einem Token buendeln. Deshalb
-// ein zweiter, getrennter Tokenabruf - siehe getGraphToken().
-const GRAPH_BASE   = "https://graph.microsoft.com/v1.0";
-const GRAPH_SCOPES = ["https://graph.microsoft.com/Group.Read.All"];
 const REDIRECT_URI = location.origin + location.pathname;
 
 // Projektnummer im Titel: die ersten 6 Zeichen, Muster 25-621.
@@ -552,55 +540,6 @@ async function getToken() {
     });
   if (!r) throw new Error("Anmeldung erforderlich");
   return r.accessToken;
-}
-
-/*
-  Token fuer Microsoft Graph.
-
-  Bewusst getrennt von getToken(): Dataverse und Graph sind zwei Ressourcen,
-  ein Zugriffstoken gilt immer nur fuer eine davon.
-
-  Und bewusst OHNE acquireTokenRedirect. getToken() darf umleiten - dort laeuft
-  gerade nichts, was verloren ginge. Hier schon: der Aufruf haengt am Oeffnen des
-  Anlegedialogs, und eine Umleitung wuerde den bereits eingetippten Titel
-  verwerfen. Fehlt die Zustimmung, sagt der Dialog das lieber hin.
-*/
-async function getGraphToken() {
-  try {
-    const r = await pca.acquireTokenSilent({ scopes: GRAPH_SCOPES, account: pca.getActiveAccount() });
-    return r.accessToken;
-  } catch (e) {
-    if (e instanceof msal.InteractionRequiredAuthError) {
-      throw new Error("Fuer Microsoft Graph liegt keine gueltige Zustimmung vor. " +
-        "In der App-Registrierung " + CONFIG.clientId + " muss Group.Read.All als " +
-        "DELEGIERTE Berechtigung eingetragen und vom Administrator bestaetigt sein. " +
-        "Anschliessend einmal ab- und wieder anmelden.");
-    }
-    throw e;
-  }
-}
-
-// Wie dvAll, nur gegen Graph: folgt @odata.nextLink bis alles gelesen ist.
-async function graphAll(path) {
-  const rows = [];
-  let next = GRAPH_BASE + path;
-  while (next) {
-    const res = await fetch(next, {
-      headers: { Authorization: "Bearer " + (await getGraphToken()), Accept: "application/json" }
-    });
-    if (!res.ok) {
-      let msg = "HTTP " + res.status;
-      try {
-        const j = JSON.parse(await res.text());
-        if (j && j.error && j.error.message) msg = j.error.message;
-      } catch (_) {}
-      const err = new Error(msg); err.status = res.status; throw err;
-    }
-    const j = await res.json();
-    rows.push.apply(rows, j.value || []);
-    next = j["@odata.nextLink"] || null;
-  }
-  return rows;
 }
 
 /* ======================================================================
@@ -1686,89 +1625,17 @@ function reportResult(run, before) {
    PROJEKT ANLEGEN
    ====================================================================== */
 
-/* Die Teams des Dialogs, jeweils mit BEIDEN Kennungen:
-     aadId  - Entra-Objekt-Id der Gruppe hinter dem Team (kommt aus Graph)
-     teamId - Dataverse-Team zu dieser Gruppe, oder null
-   Beide werden gebraucht: GrantAccess kennt nur die teamId, waehrend
-   New-ProjectFromTemplate.ps1 -TeamAadId die aadId erwartet. */
-let createTeams = [];
-
-/*
-  Fuellt das Team-Auswahlfeld.
-
-  Zwei Quellen, weil keine allein reicht:
-    - Graph liefert die ECHTEN Teams des Tenants (eine Entra-Gruppe ist noch
-      kein Team - erst resourceProvisioningOptions = 'Team' macht sie dazu).
-    - Dataverse liefert die teamid, ohne die GrantAccess nicht aufrufbar ist.
-
-  Die Schnittmenge ist nicht vollstaendig, und zwar aus einem Grund, der sich
-  nicht umgehen laesst: Gruppenteams entstehen in Dataverse erst, wenn ein
-  Mitglied der Gruppe die Umgebung zum ERSTEN Mal benutzt hat. Zu einem frisch
-  angelegten Team gibt es hier also noch nichts, woran eine Freigabe haengen
-  koennte. Solche Teams werden deshalb angezeigt, aber ausgegraut - sie zu
-  verschweigen hiesse, jemanden nach einem Team suchen zu lassen, das es
-  sichtbar gibt.
-*/
-async function ladeTeams() {
-  const sel = $("#cpTeam");
-  sel.disabled = true;
-  sel.innerHTML = '<option value="">Teams werden geladen …</option>';
-  createTeams = [];
-
-  const [gruppen, dvTeams] = await Promise.all([
-    graphAll("/groups?$filter=" +
-             encodeURIComponent("resourceProvisioningOptions/Any(x:x eq 'Team')") +
-             "&$select=id,displayName&$top=999"),
-    dvAll("teams?$select=teamid,azureactivedirectoryobjectid&$filter=teamtype eq 3")
-  ]);
-
-  const nachAad = new Map();
-  for (const t of dvTeams) {
-    const aad = String(t.azureactivedirectoryobjectid || "").toLowerCase();
-    if (aad) nachAad.set(aad, t.teamid);
-  }
-
-  createTeams = gruppen
-    .map(g => ({ aadId: g.id,
-                 name: g.displayName || "(ohne Namen)",
-                 teamId: nachAad.get(String(g.id).toLowerCase()) || null }))
-    .sort((a, b) => a.name.localeCompare(b.name, "de"));
-
-  sel.innerHTML = '<option value="">Bitte wählen …</option>' +
-    createTeams.map(t => t.teamId
-      ? '<option value="' + esc(t.teamId) + '">' + esc(t.name) + "</option>"
-      : '<option value="" disabled>' + esc(t.name) +
-        " – in Dataverse noch nicht vorhanden</option>").join("");
-  sel.disabled = false;
-
-  const ohne = createTeams.filter(t => !t.teamId).length;
-  $("#createTeamHint").innerHTML = ohne
-    ? '<div class="notice info">' + ohne + " von " + createTeams.length +
-      " Teams sind ausgegraut: zu ihnen gibt es in Dataverse noch kein Team. " +
-      "Gruppenteams entstehen dort erst, wenn ein Mitglied der Gruppe die Umgebung " +
-      "zum ersten Mal benutzt hat – vorher lässt sich nichts freigeben.</div>"
-    : "";
-}
-
-async function openCreateProject() {
+/* Das Projekt entsteht OHNE Team: seit dem 29.09.2026 wird es haendisch mit
+   dem zugehoerigen Team verbunden und freigegeben - so entschieden. Der Dialog
+   fragt deshalb nur den Titel ab, schreibt kein ver_aadgroupid und ruft kein
+   GrantAccess auf. */
+function openCreateProject() {
   const dlg = $("#createDlg");
   $("#cpTitle").value = "";
   $("#createMsg").innerHTML = "";
-  $("#createTeamHint").innerHTML = "";
   $("#cpGo").disabled = true;
   dlg.showModal();
   $("#cpTitle").focus();
-
-  // Die Teamliste wird bei JEDEM Oeffnen frisch geholt, nicht beim Anmelden:
-  // faellt Graph aus, soll das den Rest der Anwendung nicht mitreissen.
-  try {
-    await ladeTeams();
-  } catch (err) {
-    $("#cpTeam").innerHTML = '<option value="">– keine Teams –</option>';
-    $("#createTeamHint").innerHTML =
-      '<div class="notice err"><strong>Die Teamliste konnte nicht geladen werden.</strong><br>' +
-      esc(err.message) + "</div>";
-  }
   validateCreate();
 }
 
@@ -1777,7 +1644,6 @@ async function openCreateProject() {
    dieser Umgebung Normalzustand, die Liste unterscheidet sie ohnehin. */
 function validateCreate() {
   const titel  = $("#cpTitle").value.trim();
-  const teamId = $("#cpTeam").value;
   let html = "";
 
   if (titel && !PROJEKTNUMMER.test(titel)) {
@@ -1793,35 +1659,26 @@ function validateCreate() {
   }
 
   $("#createMsg").innerHTML = html;
-  $("#cpGo").disabled = !(titel && teamId);
+  $("#cpGo").disabled = !titel;
 }
 
 async function createProject() {
   const titel = $("#cpTitle").value.trim();
-  const team  = createTeams.find(t => t.teamId && t.teamId === $("#cpTeam").value);
-  if (!titel || !team) return;
+  if (!titel) return;
 
   $("#cpGo").disabled = true;
   overlay(true, "Projekt wird angelegt …");
 
-  // --- Schritt 1: Projekt -------------------------------------------------
   // msdyn_schedulemode ist NUR hier schreibbar. Wird es beim Anlegen nicht
   // gesetzt, traegt das Projekt fuer immer den falschen Wert - korrigieren
   // laesst es sich danach nur durch Loeschen und Neuanlegen.
-  //
-  // ver_aadgroupid haelt die Entra-Gruppen-Id des gewaehlten Teams fest. Sie
-  // steht in keiner Standardspalte: die Freigabe hinterlaesst nur die
-  // Dataverse-teamid, und aus der laesst sich nicht ablesen, WELCHES Team im
-  // Dialog gemeint war. Ohne diese Spalte muesste sie jeder, der spaeter
-  // New-ProjectFromTemplate.ps1 -TeamAadId aufruft, von Hand heraussuchen.
   let projectId = null;
   try {
     const neu = await dv("msdyn_projects", {
       method: "POST",
       headers: { Prefer: "return=representation" },
       body: { msdyn_subject: titel,
-              msdyn_schedulemode: CONFIG.neueProjektAufgabenart,
-              ver_aadgroupid: team.aadId }
+              msdyn_schedulemode: CONFIG.neueProjektAufgabenart }
     });
     projectId = neu && neu.msdyn_projectid;
     if (!projectId) throw new Error("Dataverse hat keine Projekt-Id zurückgegeben.");
@@ -1834,26 +1691,6 @@ async function createProject() {
     return;
   }
 
-  // --- Schritt 2: Freigabe ------------------------------------------------
-  // Ab hier EXISTIERT das Projekt. Scheitert die Freigabe, bleibt es stehen:
-  // ein DELETE auf msdyn_project ist in dieser Umgebung nirgends erprobt, und
-  // ein Projekt ohne Freigabe richtet keinen Schaden an - es fehlt nur ein
-  // Schritt, der sich nachholen laesst. Der Dialog schliesst trotzdem, damit
-  // niemand auf "Erstellen" drueckt und ein zweites Projekt erzeugt.
-  let freigabeFehler = null;
-  try {
-    overlay(true, "Projekt wird für das Team freigegeben …");
-    await dv("GrantAccess", { method: "POST", body: {
-      Target: { "@odata.type": "Microsoft.Dynamics.CRM.msdyn_project", msdyn_projectid: projectId },
-      PrincipalAccess: {
-        Principal:  { "@odata.type": "Microsoft.Dynamics.CRM.team", ownerid: team.teamId },
-        AccessMask: CONFIG.freigabeRechte
-      }
-    }});
-  } catch (err) {
-    freigabeFehler = err.message;
-  }
-
   $("#createDlg").close();
 
   // Nur die Projektliste nachladen. Ein frisches Projekt hat keine Aufgaben
@@ -1863,24 +1700,11 @@ async function createProject() {
   catch (err) { /* Das Projekt steht trotzdem - beim naechsten Laden ist es da. */ }
   overlay(false);
 
-  const skript = "New-ProjectFromTemplate.ps1 -ProjectId '" + projectId +
-                 "' -TeamAadId '" + team.aadId + "'";
+  const skript = "New-ProjectFromTemplate.ps1 -ProjectId '" + projectId + "'";
 
-  lastResultHtml = freigabeFehler
-    ? '<div class="notice err"><strong>Das Projekt „' + esc(titel) +
-      "“ wurde angelegt, die Freigabe ist gescheitert.</strong><br>Meldung: " +
-      esc(freigabeFehler) + "<ul><li>Projekt-Id: <code>" + esc(projectId) + "</code></li>" +
-      "<li>Team: „" + esc(team.name) + "“ (Entra-Id <code>" + esc(team.aadId) +
-      "</code>)</li></ul>Das Projekt steht in Dataverse und wurde <strong>nicht</strong> " +
-      "entfernt. Bis die Freigabe nachgeholt ist, sieht das Team es nicht. Nachholen " +
-      "lässt sie sich in Project for the Web oder am Ende von " +
-      "<code>" + esc(skript) + "</code>. Häufigste Ursache: die Sicherheitsrolle des " +
-      "angemeldeten Benutzers trägt kein <code>Share</code>-Recht auf " +
-      "<code>msdyn_project</code>.</div>"
-    : '<div class="notice ok"><strong>Projekt „' + esc(titel) +
-      "“ wurde angelegt</strong> und für das Team „" + esc(team.name) +
-      "“ freigegeben. Es enthält noch keine Buckets und keine Aufgaben – " +
-      "die Vorlage kopiert <code>" + esc(skript) + "</code> hinein.</div>";
+  lastResultHtml = '<div class="notice ok"><strong>Projekt „' + esc(titel) +
+    "“ wurde angelegt.</strong> Es enthält noch keine Buckets und keine Aufgaben – " +
+    "die Vorlage kopiert <code>" + esc(skript) + "</code> hinein.</div>";
 
   route();
 }
@@ -2142,9 +1966,22 @@ const MONATE   = ["Jan.", "Feb.", "März", "Apr.", "Mai", "Juni",
 
 // Ueberlebt den Wechsel zwischen den Ansichten, damit Zoom und Suche beim
 // Zurueckkommen noch so stehen, wie man sie verlassen hat.
-// person: Name aus dem Filter, label: Schema-Label oder RM_OHNE_LABEL; "" = alle
-const rmState = { zoom: 110, q: "", person: "", label: "" };
+// person: Name aus dem Filter, "" = alle. labels: Liste aus Schema-Labels und
+// RM_OHNE_LABEL, wirkt als ODER; leer = alle. labelsOffen: Klappmenue offen -
+// muss den Neuaufbau der Ansicht ueberstehen. mitte: einmalig nach dem
+// Neuaufbau anzufahrender Tag statt "Heute" (null = Heute).
+const rmState = { zoom: 110, q: "", person: "", labels: [], labelsOffen: false, mitte: null };
 const RM_OHNE_LABEL = "(ohne Label)";
+
+// Klick ausserhalb schliesst das Label-Menue der Roadmap. Einmal global
+// registriert, weil viewRoadmap() bei jeder Aenderung neu aufbaut.
+document.addEventListener("click", ev => {
+  if (!rmState.labelsOffen) return;
+  if (ev.target.closest && ev.target.closest("#rmLabels")) return;
+  rmState.labelsOffen = false;
+  const dd = $("#rmLabels");
+  if (dd) dd.classList.remove("open");
+});
 
 // Personen, die im Filter der Roadmap NICHT zur Wahl stehen (so gewuenscht am
 // 25.09.2026). Verglichen wird unempfindlich gegen Gross/Klein und Umlaut-
@@ -2208,20 +2045,25 @@ const einer  = (n, eins, viele) => n.toLocaleString("de-DE") + " " + (n === 1 ? 
       diese Aufgaben statt zu verschwinden.
     - Projekte ohne einen dieser Faelle fallen weg.
 
-  Labelfilter (so entschieden am 25.09.2026), wenn `label` gesetzt ist:
+  Labelfilter (so entschieden am 25.09.2026), wenn `labels` nicht leer ist:
     - Gemessen an den EIGENEN Labels der Aufgabe - auch beim Phasenbalken, damit
       Filter und Farbe dasselbe sagen. "Traegt das Label" reicht: eine Aufgabe
       mit Plan UND Fix erscheint unter beiden.
-    - RM_OHNE_LABEL trifft genau die grauen Elemente (kein Schema-Label).
+    - Mehrere gewaehlte Labels wirken als ODER (so entschieden am 30.09.2026):
+      ein Element bleibt, sobald EINES davon zutrifft.
+    - RM_OHNE_LABEL trifft genau die grauen Elemente (kein Schema-Label) und
+      laesst sich per ODER mit den uebrigen kombinieren.
     - Person und Label wirken als UND am selben Element.
 */
-function roadmapRows(person, label) {
+function roadmapRows(person, labels) {
   const byId = new Map(store.tasks.map(t => [t.msdyn_projecttaskid, t]));
 
-  const labelKlein = (label || "").toLowerCase();
-  const labelOk = t => !label
-    || (label === RM_OHNE_LABEL ? labelFarbe(t) === OHNE_LABEL_FARBE
-                                : (t.__labelsLower || []).includes(labelKlein));
+  const gewaehlt = labels || [];
+  const ohneLabel = gewaehlt.includes(RM_OHNE_LABEL);
+  const labelsKlein = gewaehlt.filter(l => l !== RM_OHNE_LABEL).map(l => l.toLowerCase());
+  const labelOk = t => !gewaehlt.length
+    || (ohneLabel && labelFarbe(t) === OHNE_LABEL_FARBE)
+    || labelsKlein.some(l => (t.__labelsLower || []).includes(l));
 
   // Direkt zugewiesen?
   const direkt = t => !person || (t.__assignees || []).includes(person);
@@ -2297,14 +2139,17 @@ function viewRoadmap() {
   const person = rmState.person;
   // Labelfilter: die fuenf Schema-Labels in Legendenreihenfolge plus "(ohne Label)".
   const labelOptionen = LABEL_LEGENDE.map(z => z.label).concat([RM_OHNE_LABEL]);
-  if (rmState.label && !labelOptionen.includes(rmState.label)) rmState.label = "";
-  const label = rmState.label;
-  const auswahl = [person, label].filter(Boolean).map(esc).join(" · ");
+  // In Menue-Reihenfolge halten, damit Kopfzeile und Meldung stabil lesen.
+  rmState.labels = labelOptionen.filter(l => rmState.labels.includes(l));
+  const labels = rmState.labels;
+  // "Plan, Fix oder Forecast" - die ODER-Wirkung soll ohne Erklaerung lesbar sein.
+  const oder = xs => xs.length < 2 ? xs.join("") : xs.slice(0, -1).join(", ") + " oder " + xs[xs.length - 1];
+  const auswahl = [person, oder(labels)].filter(Boolean).map(esc).join(" · ");
 
   // gesamtRows: ungefiltert - Basis fuer "ausgeblendet" und "7 von 38".
   // alle: was tatsaechlich gezeichnet wird (Zeitachse, Zaehler, Zeilen).
   const gesamtRows = roadmapRows(null, null);
-  const alle = (person || label) ? roadmapRows(person, label) : gesamtRows;
+  const alle = (person || labels.length) ? roadmapRows(person, labels) : gesamtRows;
   // Phasen nur aus den Zeilen mit echter LP-Struktur zaehlen; die Rueckfall-Zeilen
   // (alle Blattaufgaben) werden getrennt genannt.
   const nBars = alle.reduce((s, r) => s + (r.alleAufgaben ? 0 : r.bars.length), 0);
@@ -2337,10 +2182,21 @@ function viewRoadmap() {
     '<option value="">(alle)</option>' +
     personen.map(n => '<option value="' + esc(n) + '"' + (n === person ? " selected" : "") + ">" + esc(n) + "</option>").join("") +
     "</select></label>" +
-    '<label class="rm-person">Label <select id="rmLabel" title="Nur Balken und Meilensteine, die dieses Label tragen">' +
-    '<option value="">(alle)</option>' +
-    labelOptionen.map(l => '<option value="' + esc(l) + '"' + (l === label ? " selected" : "") + ">" + esc(l) + "</option>").join("") +
-    "</select></label>" +
+    // Mehrfachauswahl wie in der Aufgabentabelle (.dd); mehrere Haken = ODER.
+    '<div class="rm-person">Label <div class="dd' + (rmState.labelsOffen ? " open" : "") + '" id="rmLabels">' +
+      '<button type="button" class="dd-btn" data-role="rmLabelsToggle" ' +
+      'title="Nur Balken und Meilensteine, die eines dieser Labels tragen">' +
+        '<span>' + (labels.length ? esc(labels.join(", ")) : "(alle)") + '</span>' +
+        (labels.length ? '<span class="dd-badge">' + labels.length + '</span>' : '') +
+        '<span class="dd-caret">▾</span></button>' +
+      '<div class="dd-menu">' +
+        labelOptionen.map(l =>
+          '<label class="dd-item"><input type="checkbox" data-rmlabel value="' + esc(l) + '"' +
+          (labels.includes(l) ? " checked" : "") + '>' +
+          (l === RM_OHNE_LABEL ? '<span class="lb lb-ohne">' + esc(l) + '</span>' : labelChip(l)) +
+          '</label>').join("") +
+        (labels.length ? '<button type="button" class="dd-clear" data-role="rmLabelsClear">Auswahl aufheben</button>' : "") +
+      '</div></div></div>' +
     '<div class="search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">' +
     '<circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>' +
     '<input type="search" id="rmQ" placeholder="Projekt suchen …" value="' + esc(rmState.q) + '"></div>' +
@@ -2367,12 +2223,38 @@ function viewRoadmap() {
   // aufgebaut statt nur neu gezeichnet. Vor dem fruehen Ausstieg registrieren,
   // damit man aus einem leeren Ergebnis wieder herauskommt.
   $("#rmPerson").addEventListener("change", ev => { rmState.person = ev.target.value; viewRoadmap(); });
-  $("#rmLabel").addEventListener("change", ev => { rmState.label = ev.target.value; viewRoadmap(); });
+  // Label-Menue: jeder Haken filtert sofort, das Menue bleibt dabei offen. Damit
+  // die Ansicht nicht auf "Heute" springt, wird der Tag in der Bildmitte
+  // gemerkt - Pixel taugen nicht, weil die Zeitachse von der Auswahl abhaengt.
+  let tagInMitte = () => null;          // wird nach dem Zeichnen ersetzt
+  const labelsNeu = neu => {
+    rmState.labels = neu;
+    rmState.mitte = tagInMitte() || rmState.mitte;   // aus leerer Ansicht: alten Tag behalten
+    viewRoadmap();
+  };
+  $("#rmLabels").addEventListener("click", ev => {
+    const rolle = ev.target.closest("[data-role]");
+    if (!rolle) return;
+    if (rolle.dataset.role === "rmLabelsToggle") {
+      rmState.labelsOffen = !rmState.labelsOffen;
+      $("#rmLabels").classList.toggle("open", rmState.labelsOffen);
+    } else if (rolle.dataset.role === "rmLabelsClear") {
+      labelsNeu([]);
+    }
+  });
+  $("#rmLabels").addEventListener("change", ev => {
+    if (!ev.target.matches("[data-rmlabel]")) return;
+    const w = ev.target.value;
+    labelsNeu(ev.target.checked ? labels.concat([w]) : labels.filter(l => l !== w));
+  });
 
   if (!alle.length) {
+    const echte = labels.filter(l => l !== RM_OHNE_LABEL);
+    const teile = echte.concat(labels.includes(RM_OHNE_LABEL) ? ["ohne Label"] : []);
+    // "mit Label Plan, Fix oder ohne Label" bzw. nur "ohne Label"
+    const labelText = !labels.length ? "" : echte.length ? " mit Label " + oder(teile) : " ohne Label";
     scroller.innerHTML = '<div class="empty">' + (auswahl
-      ? "Keine terminierte Aufgabe" +
-        (label ? (label === RM_OHNE_LABEL ? " ohne Label" : " mit Label " + esc(label)) : "") +
+      ? "Keine terminierte Aufgabe" + esc(labelText) +
         (person ? " von " + esc(person) : "") + "."
       : "Kein Projekt hat eine terminierte Aufgabe.") + "</div>";
     return;
@@ -2517,8 +2399,17 @@ function viewRoadmap() {
     scroller.scrollLeft = Math.max(0, mitteTag * ppd - sicht / 2);
   });
 
+  tagInMitte = () => new Date(achseStart.getTime() +
+    (scroller.scrollLeft + (scroller.clientWidth - RM_NAMEW) / 2) / ppd * TAG_MS);
+
   draw();
-  zuHeute();
+  if (rmState.mitte) {
+    const sicht = scroller.clientWidth - RM_NAMEW;
+    scroller.scrollLeft = Math.max(0, (rmState.mitte - achseStart) / TAG_MS * ppd - sicht / 2);
+    rmState.mitte = null;
+  } else {
+    zuHeute();
+  }
 }
 
 /* ======================================================================
@@ -2571,7 +2462,6 @@ for (const st of PRIO_STUFEN) {
 $("#logout").addEventListener("click", () => pca.logoutRedirect());
 
 $("#cpTitle").addEventListener("input", validateCreate);
-$("#cpTeam").addEventListener("change", validateCreate);
 $("#cpGo").addEventListener("click", createProject);
 
 // Abbrechen schließt nur – es passiert nichts.
