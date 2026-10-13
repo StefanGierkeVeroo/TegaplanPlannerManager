@@ -597,7 +597,9 @@ async function dvAll(path, onProgress) {
 /* ======================================================================
    DATENHALTUNG
    ====================================================================== */
-const PROJECT_SELECT = "msdyn_projectid,msdyn_subject,msdyn_scheduledstart,msdyn_finish,msdyn_progress";
+const PROJECT_SELECT = "msdyn_projectid,msdyn_subject,msdyn_scheduledstart,msdyn_finish,msdyn_progress," +
+                       // Fuer den Projektleiterfilter der Roadmap; der Name kommt per Annotation (FV).
+                       "_msdyn_projectmanager_value";
 const TASK_SELECT = "msdyn_projecttaskid,msdyn_subject,_msdyn_projectbucket_value," +
                     "msdyn_scheduledstart,msdyn_scheduledend,msdyn_priority,msdyn_progress," +
                     "_msdyn_project_value,msdyn_ismanual,msdyn_summary," +
@@ -1778,7 +1780,7 @@ function viewProjectDetail(projectId, tab) {
   if (zuwHinweis) v.appendChild(zuwHinweis);
 
   const tbl = createTable({
-    columns: taskColumns(false),
+    columns: taskColumns(false, true),
     rows,
     getId: r => r.msdyn_projecttaskid,
     selectable: true,
@@ -1966,11 +1968,12 @@ const MONATE   = ["Jan.", "Feb.", "März", "Apr.", "Mai", "Juni",
 
 // Ueberlebt den Wechsel zwischen den Ansichten, damit Zoom und Suche beim
 // Zurueckkommen noch so stehen, wie man sie verlassen hat.
-// person: Name aus dem Filter, "" = alle. labels: Liste aus Schema-Labels und
+// person: Name aus dem Filter, "" = alle. pl: systemuserid des Projektleiters,
+// "" = alle. labels: Liste aus Schema-Labels und
 // RM_OHNE_LABEL, wirkt als ODER; leer = alle. labelsOffen: Klappmenue offen -
 // muss den Neuaufbau der Ansicht ueberstehen. mitte: einmalig nach dem
 // Neuaufbau anzufahrender Tag statt "Heute" (null = Heute).
-const rmState = { zoom: 110, q: "", person: "", labels: [], labelsOffen: false, mitte: null };
+const rmState = { zoom: 110, q: "", person: "", pl: "", labels: [], labelsOffen: false, mitte: null };
 const RM_OHNE_LABEL = "(ohne Label)";
 
 // Klick ausserhalb schliesst das Label-Menue der Roadmap. Einmal global
@@ -1984,9 +1987,11 @@ document.addEventListener("click", ev => {
 });
 
 // Personen, die im Filter der Roadmap NICHT zur Wahl stehen (so gewuenscht am
-// 25.09.2026). Verglichen wird unempfindlich gegen Gross/Klein und Umlaut-
-// Schreibweise (ue = ü), weil der Dataverse-Name beides tragen kann.
-const RM_PERSONEN_AUSGESCHLOSSEN = ["Ardian Kovani", "Dilan Sevinc", "Olaf Greismuehlen"];
+// 25.09.2026) - in "Person" UND "Projektleiter". Verglichen wird unempfindlich
+// gegen Gross/Klein und Umlaut-Schreibweise (ue = ü), weil der Dataverse-Name
+// beides tragen kann. "Veroo Admin" seit 13.10.2026 (technisches Konto,
+// Projektleiter von "RP-Abwesenheiten").
+const RM_PERSONEN_AUSGESCHLOSSEN = ["Ardian Kovani", "Dilan Sevinc", "Olaf Greismuehlen", "Veroo Admin"];
 const normName = s => String(s || "").toLowerCase()
   .replace(/ä/g, "ae").replace(/ö/g, "oe").replace(/ü/g, "ue").replace(/ß/g, "ss")
   .replace(/\s+/g, " ").trim();
@@ -2054,8 +2059,14 @@ const einer  = (n, eins, viele) => n.toLocaleString("de-DE") + " " + (n === 1 ? 
     - RM_OHNE_LABEL trifft genau die grauen Elemente (kein Schema-Label) und
       laesst sich per ODER mit den uebrigen kombinieren.
     - Person und Label wirken als UND am selben Element.
+
+  Projektleiterfilter (so entschieden am 13.10.2026), wenn `pl` gesetzt ist:
+    - Wirkt auf ganze PROJEKTE, nicht auf Elemente: es bleiben nur Projekte,
+      deren msdyn_projectmanager die gewaehlte systemuserid ist.
+    - Vorfilter: innerhalb dieser Projekte wirken Person, Label und Suche wie
+      oben (UND).
 */
-function roadmapRows(person, labels) {
+function roadmapRows(person, labels, pl) {
   const byId = new Map(store.tasks.map(t => [t.msdyn_projecttaskid, t]));
 
   const gewaehlt = labels || [];
@@ -2100,6 +2111,7 @@ function roadmapRows(person, labels) {
   const rows = [];
   for (const p of store.projects) {
     if (!projektErlaubt(p)) continue;          // Ausschlussliste, siehe RM_PROJEKTE_AUSGESCHLOSSEN
+    if (pl && p._msdyn_projectmanager_value !== pl) continue;   // Projektleiterfilter
     let bars = [];
     const ms = [], blaetter = [];
     for (const t of store.byProject.get(p.msdyn_projectid) || []) {
@@ -2137,6 +2149,19 @@ function viewRoadmap() {
     .sort((a, b) => a.localeCompare(b, "de"));
   if (rmState.person && !personen.includes(rmState.person)) rmState.person = "";
   const person = rmState.person;
+  // Projektleiter (so entschieden am 13.10.2026): nur wer bei mindestens einem
+  // Projekt der Roadmap (nach der Projekt-Ausschlussliste) msdyn_projectmanager
+  // ist, ohne die Personen-Ausschlussliste. Wert = systemuserid, Anzeige = Name.
+  const plNamen = new Map();
+  for (const p of store.projects) {
+    const id = p._msdyn_projectmanager_value;
+    const name = (p["_msdyn_projectmanager_value" + FV] || "").trim();
+    if (id && name && projektErlaubt(p) && personErlaubt(name)) plNamen.set(id, name);
+  }
+  const projektleiter = [...plNamen].map(([id, name]) => ({ id, name }))
+    .sort((a, b) => a.name.localeCompare(b.name, "de"));
+  if (rmState.pl && !plNamen.has(rmState.pl)) rmState.pl = "";
+  const pl = rmState.pl;
   // Labelfilter: die fuenf Schema-Labels in Legendenreihenfolge plus "(ohne Label)".
   const labelOptionen = LABEL_LEGENDE.map(z => z.label).concat([RM_OHNE_LABEL]);
   // In Menue-Reihenfolge halten, damit Kopfzeile und Meldung stabil lesen.
@@ -2144,12 +2169,12 @@ function viewRoadmap() {
   const labels = rmState.labels;
   // "Plan, Fix oder Forecast" - die ODER-Wirkung soll ohne Erklaerung lesbar sein.
   const oder = xs => xs.length < 2 ? xs.join("") : xs.slice(0, -1).join(", ") + " oder " + xs[xs.length - 1];
-  const auswahl = [person, oder(labels)].filter(Boolean).map(esc).join(" · ");
+  const auswahl = [pl ? "PL " + plNamen.get(pl) : "", person, oder(labels)].filter(Boolean).map(esc).join(" · ");
 
   // gesamtRows: ungefiltert - Basis fuer "ausgeblendet" und "7 von 38".
   // alle: was tatsaechlich gezeichnet wird (Zeitachse, Zaehler, Zeilen).
-  const gesamtRows = roadmapRows(null, null);
-  const alle = (person || labels.length) ? roadmapRows(person, labels) : gesamtRows;
+  const gesamtRows = roadmapRows(null, null, null);
+  const alle = (pl || person || labels.length) ? roadmapRows(person, labels, pl) : gesamtRows;
   // Phasen nur aus den Zeilen mit echter LP-Struktur zaehlen; die Rueckfall-Zeilen
   // (alle Blattaufgaben) werden getrennt genannt.
   const nBars = alle.reduce((s, r) => s + (r.alleAufgaben ? 0 : r.bars.length), 0);
@@ -2181,6 +2206,11 @@ function viewRoadmap() {
     ' title="' + (personSperre ? "Zuweisungen nicht geladen" : "Nur Projekte und Phasen mit Aufgaben dieser Person") + '">' +
     '<option value="">(alle)</option>' +
     personen.map(n => '<option value="' + esc(n) + '"' + (n === person ? " selected" : "") + ">" + esc(n) + "</option>").join("") +
+    "</select></label>" +
+    '<label class="rm-person">Projektleiter <select id="rmPl"' + (projektleiter.length ? "" : " disabled") +
+    ' title="Nur Projekte, bei denen diese Person Projektleiter ist (msdyn_projectmanager)">' +
+    '<option value="">(alle)</option>' +
+    projektleiter.map(x => '<option value="' + esc(x.id) + '"' + (x.id === pl ? " selected" : "") + ">" + esc(x.name) + "</option>").join("") +
     "</select></label>" +
     // Mehrfachauswahl wie in der Aufgabentabelle (.dd); mehrere Haken = ODER.
     '<div class="rm-person">Label <div class="dd' + (rmState.labelsOffen ? " open" : "") + '" id="rmLabels">' +
@@ -2232,6 +2262,12 @@ function viewRoadmap() {
     rmState.mitte = tagInMitte() || rmState.mitte;   // aus leerer Ansicht: alten Tag behalten
     viewRoadmap();
   };
+  // Projektleiter: wie beim Label-Menue den Tag in der Bildmitte behalten.
+  $("#rmPl").addEventListener("change", ev => {
+    rmState.pl = ev.target.value;
+    rmState.mitte = tagInMitte() || rmState.mitte;
+    viewRoadmap();
+  });
   $("#rmLabels").addEventListener("click", ev => {
     const rolle = ev.target.closest("[data-role]");
     if (!rolle) return;
@@ -2255,7 +2291,8 @@ function viewRoadmap() {
     const labelText = !labels.length ? "" : echte.length ? " mit Label " + oder(teile) : " ohne Label";
     scroller.innerHTML = '<div class="empty">' + (auswahl
       ? "Keine terminierte Aufgabe" + esc(labelText) +
-        (person ? " von " + esc(person) : "") + "."
+        (person ? " von " + esc(person) : "") +
+        (pl ? " in Projekten von " + esc(plNamen.get(pl)) : "") + "."
       : "Kein Projekt hat eine terminierte Aufgabe.") + "</div>";
     return;
   }
