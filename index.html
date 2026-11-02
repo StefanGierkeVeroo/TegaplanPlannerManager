@@ -141,7 +141,7 @@ a.plink:hover{text-decoration:underline}
 .dd{position:relative}
 .dd-btn{display:flex;align-items:center;gap:7px;min-width:168px;max-width:260px;
   padding:6px 9px;border:1px solid var(--line-strong);border-radius:6px;background:#fff;
-  color:var(--text);font:inherit;text-align:left}
+  color:var(--text);font:inherit;text-align:left;cursor:pointer}
 .dd-btn:hover{border-color:var(--muted)}
 .dd-btn>span:first-child{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .dd-menu{display:none;position:absolute;top:calc(100% + 6px);left:0;z-index:5;min-width:200px;
@@ -1014,8 +1014,11 @@ function createTable(opt) {
     if (role === "next") { state.page++; render(); return; }
     if (role === "clear") { selected.clear(); notify(); render(); return; }
     if (role === "fclear") { state.f = {}; state.mOpen = null; state.page = 0; render(); return; }
-    if (role === "mtoggle") {
-      const k = ev.target.closest("[data-key]").dataset.key;
+    // Klick auf Text, Zaehler oder Pfeil im Knopf trifft ein inneres <span> -
+    // daher ueber closest den Knopf selbst suchen.
+    const mBtn = ev.target.closest && ev.target.closest('[data-role="mtoggle"]');
+    if (mBtn) {
+      const k = mBtn.dataset.key;
       state.mOpen = state.mOpen === k ? null : k; render(); return;
     }
     if (role === "mclear") {
